@@ -1,7 +1,7 @@
 ## Description
 
-<!-- What does this PR do? Link to the related issue if applicable. -->
-<!-- Use "Closes #N" to auto-close the issue when this PR is merged. -->
+<!-- What does this merge request do? Link to the related issue if applicable. -->
+<!-- Use "Closes #N" to auto-close the issue when this merge request is merged. -->
 
 Closes #
 
@@ -25,13 +25,13 @@ Closes #
 
 ## Checklist
 
-- [ ] I have read [CONTRIBUTING.md](../docs/CONTRIBUTING.md)
+- [ ] I have read [CONTRIBUTING.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/project/CONTRIBUTING.md)
 - [ ] My branch is based on `dev`, not `main`
 - [ ] My commits follow the [Conventional Commits](https://www.conventionalcommits.org/) format
-- [ ] My code follows the project's [coding standards](../docs/CONTRIBUTING.md#coding-standards)
+- [ ] My code follows the project's [coding standards](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/project/CONTRIBUTING.md#coding-standards)
 - [ ] I have added/updated tests where appropriate
-- [ ] I have updated relevant documentation (README, docs/, inline comments)
-- [ ] All CI checks pass
+- [ ] I have updated relevant documentation (README, the [documentation repository](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation), inline comments)
+- [ ] The pipeline passes
 
 ---
 
@@ -41,13 +41,15 @@ Closes #
 <!-- For native (C++) changes, please include relevant logcat output. -->
 
 **Test device(s):**
+
 - Device: <!-- e.g. brand/model, chipset, arm64-only y/n -->
 - Android version: <!-- e.g. Android 15 -->
 - Host ABI: <!-- e.g. arm64-v8a only -->
 
 **Test steps:**
-1. 
-2. 
+
+1.
+2.
 
 ---
 

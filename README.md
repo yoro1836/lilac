@@ -6,19 +6,16 @@
 Run a full isolated Android guest inside your existing device, with
 **32-bit app support on arm64-only hardware** via QEMU user-mode emulation.
 
-[![VineOS Android CI](https://github.com/Hexadecinull/VineOS/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Hexadecinull/VineOS/actions/workflows/ci.yml)
-[![VineOS CodeQL CI](https://github.com/Hexadecinull/VineOS/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/Hexadecinull/VineOS/actions/workflows/codeql.yml)
-[![VineOS Dependency Review](https://github.com/Hexadecinull/VineOS/actions/workflows/dependency-review.yml/badge.svg?branch=main)](https://github.com/Hexadecinull/VineOS/actions/workflows/dependency-review.yml)
-[![VineOS Nightly Build CI](https://github.com/Hexadecinull/VineOS/actions/workflows/nightly.yml/badge.svg?branch=main)](https://github.com/Hexadecinull/VineOS/actions/workflows/nightly.yml)
-[![VineOS Release CI](https://github.com/Hexadecinull/VineOS/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/Hexadecinull/VineOS/actions/workflows/release.yml)
-[![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Hexadecinull/VineOS/total)](https://github.com/Hexadecinull/VineOS/releases)
-[![GitHub Downloads (latest)](https://img.shields.io/github/downloads/Hexadecinull/VineOS/latest)](https://github.com/Hexadecinull/VineOS/releases/latest)
-[![GitHub Release](https://img.shields.io/github/v/release/Hexadecinull/VineOS)](https://github.com/Hexadecinull/VineOS/releases/latest)
-[![GitHub Repo stars](https://img.shields.io/github/stars/Hexadecinull/VineOS)](https://github.com/Hexadecinull/VineOS/stargazers)
-[![GitHub Pull Requests](https://img.shields.io/github/issues-pr/Hexadecinull/VineOS)](https://github.com/Hexadecinull/VineOS/pulls)
-[![GitHub Issues](https://img.shields.io/github/issues/Hexadecinull/VineOS)](https://github.com/Hexadecinull/VineOS/issues)
+[![Pipeline status](https://gitlab.com/Hexadecinull/VineOS/VineOS/badges/main/pipeline.svg)](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/pipelines)
+[![Latest release](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/badges/release.svg)](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/releases)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+[![Renovate enabled](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot)](renovate.json)
+[![GitLab stars](https://img.shields.io/gitlab/stars/Hexadecinull%2FVineOS%2FVineOS)](https://gitlab.com/Hexadecinull/VineOS/VineOS)
+[![GitLab open issues](https://img.shields.io/gitlab/issues/open/Hexadecinull%2FVineOS%2FVineOS)](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/issues)
+[![GitLab open merge requests](https://img.shields.io/gitlab/merge-requests/open/Hexadecinull%2FVineOS%2FVineOS)](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/merge_requests)
+[![Discord](https://img.shields.io/discord/1558189985230889033?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/sVgCAdgGgR)
 
-[**Download**](#installation) · [**Documentation**](docs/README.md) · [**Roadmap**](#roadmap) · [**FAQ**](#faq)
+[**Download**](#installation) · [**Website**](https://vineos.hexadecinull.dpdns.org) · [**Documentation**](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation) · [**Roadmap**](#roadmap) · [**FAQ**](#faq) · [**Discord**](https://discord.gg/sVgCAdgGgR)
 
 </div>
 
@@ -32,8 +29,11 @@ Run a full isolated Android guest inside your existing device, with
 - [ROM support](#rom-support)
 - [Installation](#installation)
 - [Documentation](#documentation)
+- [Repositories](#repositories)
 - [Roadmap](#roadmap)
 - [FAQ](#faq)
+- [Community](#community)
+- [Contributing](#contributing)
 - [License](#license)
 - [Credits & acknowledgements](#credits--acknowledgements)
 
@@ -78,7 +78,7 @@ You get a real second phone inside your phone.
 - 🔒 **Isolated**: PID, mount, UTS, and IPC namespace separation
 - 🌱 **Multi-instance**: run multiple independent VMs simultaneously
 - 🔧 **Root support**: optional Magisk/root inside instances (requires rooted host)
-- ⚡ **Shizuku**: optional, no-root privilege probe via ADB/Wireless Debugging (see `docs/NOROOT_RESEARCH.md`)
+- ⚡ **Shizuku**: optional, no-root privilege probe via ADB/Wireless Debugging (see [NOROOT_RESEARCH.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/reference/NOROOT_RESEARCH.md))
 - 📱 **minSdk 26, targetSdk 37**: supports Android 8.0 through Android 17
 
 ---
@@ -93,7 +93,7 @@ You get a real second phone inside your phone.
 through QEMU user-mode emulation everywhere else, including on the growing
 range of arm64-only SoCs across many vendors, and on non-ARM hosts
 entirely. See
-[ARCHITECTURE.md](docs/ARCHITECTURE.md#abi-compatibility) for the full
+[ARCHITECTURE.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/reference/ARCHITECTURE.md#abi-compatibility) for the full
 host/guest compatibility matrix.
 
 ---
@@ -109,7 +109,7 @@ host/guest compatibility matrix.
 
 ROMs are built from AOSP targeting the `ranchu` virtual device board and
 distributed as `.vrom` archives. See
-[docs/BUILDING.md](docs/BUILDING.md#building-aosp-rom-images) for the ROM
+[BUILDING.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/guides/BUILDING.md#building-aosp-rom-images) for the ROM
 build guide.
 
 ---
@@ -117,7 +117,7 @@ build guide.
 ## Installation
 
 Download the latest release APK from the
-[Releases page](https://github.com/Hexadecinull/VineOS/releases).
+[Releases page](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/releases).
 
 VineOS is not yet on the Play Store. First release planned at Beta
 stability.
@@ -127,8 +127,20 @@ stability.
 ## Documentation
 
 All project documentation, including the architecture guide, build
-instructions, usage guide, contributing guide, and policies, lives in
-[`docs/`](docs/README.md). Start there.
+instructions, usage guide, contributing guide, and policies, lives in its own
+repository, [VineOS-Documentation](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation). Start there.
+
+---
+
+## Repositories
+
+VineOS is split across three GitLab repositories:
+
+| Repository | What it contains |
+|---|---|
+| [VineOS](https://gitlab.com/Hexadecinull/VineOS/VineOS) | The Android app, the native runtime, and CI (this repository) |
+| [VineOS-Website](https://gitlab.com/Hexadecinull/VineOS/VineOS-Website) | The project website |
+| [VineOS-Documentation](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation) | Guides, reference, and project policies |
 
 ---
 
@@ -192,8 +204,26 @@ their changes.
 **Can I use VineOS on x86_64 Android devices or emulators?**
 Yes. VineOS builds and runs on `arm64-v8a`, `armeabi-v7a`, `x86_64`, and
 `x86` hosts; ARM guest ROMs run through QEMU on non-ARM hosts. See
-[ARCHITECTURE.md](docs/ARCHITECTURE.md#abi-compatibility) for exactly
+[ARCHITECTURE.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/reference/ARCHITECTURE.md#abi-compatibility) for exactly
 what runs natively versus emulated on each host.
+
+---
+
+## Community
+
+Questions, bug reports, or just curious how it works? Join the official
+[VineOS Discord](https://discord.gg/sVgCAdgGgR). It's the quickest way to
+reach the developers and other users.
+
+---
+
+## Contributing
+
+Contributions of every size are welcome, from typo fixes to ROM images. Read
+the [contributing guide](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/project/CONTRIBUTING.md) first, then open an
+[issue](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/issues) or a [merge request](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/merge_requests). To
+report a security vulnerability, follow the
+[security policy](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/project/SECURITY.md) instead of opening a public issue.
 
 ---
 
@@ -201,7 +231,7 @@ what runs natively versus emulated on each host.
 
 VineOS is licensed under the GNU General Public License v3.0. See
 [LICENSE](LICENSE) for the full text, and
-[docs/TERMS.md](docs/TERMS.md) for the project's terms of use.
+[TERMS.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/project/TERMS.md) for the project's terms of use.
 
 ### Third-party components
 
@@ -227,5 +257,5 @@ VineOS is licensed under the GNU General Public License v3.0. See
 ---
 
 <div align="center">
-  <sub>Made with 🌿 by <a href="https://github.com/Hexadecinull">Hexadecinull</a> and contributors</sub>
+  <sub>Made with 🌿 by <a href="https://gitlab.com/Hexadecinull">Hexadecinull</a> and contributors</sub>
 </div>

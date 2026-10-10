@@ -1,0 +1,254 @@
+stages:
+  - test
+  - build
+  - release
+
+include:
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
+variables:
+  ANDROID_HOME: $CI_PROJECT_DIR/.android-sdk
+  GRADLE_USER_HOME: $CI_PROJECT_DIR/.gradle
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+  SCHEDULE_TYPE:
+    value: ""
+    description: "Set to nightly to run the nightly build on a manual run. Pipeline schedules set this themselves."
+  RELEASE_VERSION_TAG:
+    value: ""
+    description: "Version tag to release, e.g. v0.2.0 or v0.2.0-beta.1. Leave empty for an ordinary CI run."
+  RELEASE_NOTES:
+    value: ""
+    description: "Optional short note shown at the top of the release description."
+  RELEASE_PRERELEASE:
+    value: "true"
+    options:
+      - "true"
+      - "false"
+    description: "Mark the release as a pre-release (added to the release title and description)."
+
+default:
+  image: eclipse-temurin:17-jdk-jammy
+  interruptible: true
+
+.rules-ci:
+  rules:
+    - if: $SCHEDULE_TYPE || $RELEASE_VERSION_TAG
+      when: never
+    - when: on_success
+
+.android:
+  variables:
+    ANDROID_SDK_NATIVE: "false"
+  cache:
+    key:
+      prefix: gradle
+      files:
+        - gradle/libs.versions.toml
+        - gradle/wrapper/gradle-wrapper.properties
+    paths:
+      - .gradle/caches
+      - .gradle/wrapper
+  before_script:
+    - chmod +x gradlew scripts/ci/*.sh
+    - scripts/ci/setup-android-sdk.sh
+
+ktlint:
+  extends: [.android, .rules-ci]
+  stage: test
+  script:
+    - ./gradlew :app:ktlintCheck --continue
+  artifacts:
+    when: on_failure
+    expire_in: 7 days
+    paths:
+      - app/build/reports/ktlint/
+
+android-lint:
+  extends: [.android, .rules-ci]
+  stage: test
+  script:
+    - ./gradlew :app:lintDebug
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - app/build/reports/lint-results-debug.html
+
+unit-tests:
+  extends: [.android, .rules-ci]
+  stage: test
+  script:
+    - ./gradlew :app:testDebugUnitTest
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - app/build/reports/tests/testDebugUnitTest/
+    reports:
+      junit: app/build/test-results/testDebugUnitTest/*.xml
+
+secret_detection:
+  stage: test
+  rules:
+    - if: $SECRET_DETECTION_DISABLED == "true" || $SCHEDULE_TYPE || $RELEASE_VERSION_TAG
+      when: never
+    - when: on_success
+
+build-debug:
+  extends: [.android, .rules-ci]
+  stage: build
+  needs: [ktlint, android-lint, unit-tests]
+  variables:
+    ANDROID_SDK_NATIVE: "true"
+  script:
+    - ./gradlew :app:assembleDebug
+  artifacts:
+    name: vineos-debug-$CI_COMMIT_SHORT_SHA
+    expire_in: 14 days
+    paths:
+      - app/build/outputs/apk/debug/app-debug.apk
+
+nightly:
+  extends: .android
+  stage: build
+  interruptible: false
+  variables:
+    ANDROID_SDK_NATIVE: "true"
+  rules:
+    - if: $SCHEDULE_TYPE == "nightly" && $CI_PROJECT_PATH =~ /^hexadecinull\/vineos\/vineos$/i
+  script:
+    - ./gradlew :app:testDebugUnitTest :app:assembleDebug
+    - cp app/build/outputs/apk/debug/app-debug.apk "VineOS-nightly-$(date +%Y%m%d)-${CI_COMMIT_SHORT_SHA}.apk"
+  artifacts:
+    name: nightly-$CI_COMMIT_SHORT_SHA
+    expire_in: 7 days
+    paths:
+      - VineOS-nightly-*.apk
+
+release-validate:
+  stage: test
+  image: alpine:3.22
+  interruptible: false
+  rules:
+    - if: $RELEASE_VERSION_TAG && $CI_PIPELINE_SOURCE == "web"
+  script:
+    - |
+      if ! echo "$RELEASE_VERSION_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+        echo "ERROR: Version tag '$RELEASE_VERSION_TAG' does not match expected format vX.Y.Z or vX.Y.Z-suffix"
+        exit 1
+      fi
+      echo "Version tag '$RELEASE_VERSION_TAG' is valid."
+
+release-build:
+  extends: .android
+  stage: build
+  needs: [release-validate]
+  interruptible: false
+  variables:
+    ANDROID_SDK_NATIVE: "true"
+    GIT_DEPTH: "0"
+  rules:
+    - if: $RELEASE_VERSION_TAG && $CI_PIPELINE_SOURCE == "web"
+  script:
+    - |
+      set -e
+      echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > keystore.jks
+      if [ ! -s keystore.jks ]; then
+        echo "ERROR: keystore.jks is empty, check the RELEASE_KEYSTORE_BASE64 variable"
+        exit 1
+      fi
+      cat > keystore.properties << EOF
+      storeFile=$CI_PROJECT_DIR/keystore.jks
+      storePassword=$RELEASE_STORE_PASSWORD
+      keyAlias=$RELEASE_KEY_ALIAS
+      keyPassword=$RELEASE_KEY_PASSWORD
+      EOF
+    - ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest
+    - ./gradlew :app:assembleRelease :app:assembleDebug
+    - |
+      set -e
+      APK="app/build/outputs/apk/release/app-release.apk"
+      if [ ! -f "$APK" ]; then
+        echo "ERROR: Release APK not found at $APK"
+        exit 1
+      fi
+      APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
+      if [ -f "$APKSIGNER" ]; then
+        "$APKSIGNER" verify --verbose "$APK"
+        echo "APK signature verified."
+      else
+        echo "apksigner not found, skipping signature verification"
+      fi
+    - |
+      set -e
+      VERSION="$RELEASE_VERSION_TAG"
+      cp app/build/outputs/apk/release/app-release.apk "VineOS-${VERSION}.apk"
+      cp app/build/outputs/apk/debug/app-debug.apk "VineOS-${VERSION}-debug.apk"
+      PACKAGE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/vineos/${VERSION}"
+      for apk in "VineOS-${VERSION}.apk" "VineOS-${VERSION}-debug.apk"; do
+        curl --fail --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "$apk" "${PACKAGE_URL}/${apk}"
+      done
+    - scripts/ci/release-notes.sh release_body.md
+  after_script:
+    - rm -f keystore.jks keystore.properties
+  artifacts:
+    name: release-apk-$RELEASE_VERSION_TAG
+    expire_in: 90 days
+    paths:
+      - VineOS-*.apk
+      - release_body.md
+
+release-publish:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/cli:v1.58.0
+  interruptible: false
+  needs:
+    - job: release-build
+      artifacts: true
+  rules:
+    - if: $RELEASE_VERSION_TAG && $CI_PIPELINE_SOURCE == "web" && $RELEASE_PRERELEASE == "true"
+      variables:
+        RELEASE_NAME: "VineOS $RELEASE_VERSION_TAG (pre-release)"
+    - if: $RELEASE_VERSION_TAG && $CI_PIPELINE_SOURCE == "web"
+      variables:
+        RELEASE_NAME: "VineOS $RELEASE_VERSION_TAG"
+  script:
+    - echo "Creating release $RELEASE_VERSION_TAG"
+  release:
+    tag_name: $RELEASE_VERSION_TAG
+    name: $RELEASE_NAME
+    description: ./release_body.md
+    ref: $CI_COMMIT_SHA
+    assets:
+      links:
+        - name: VineOS-$RELEASE_VERSION_TAG.apk
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vineos/$RELEASE_VERSION_TAG/VineOS-$RELEASE_VERSION_TAG.apk
+          link_type: package
+        - name: VineOS-$RELEASE_VERSION_TAG-debug.apk
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vineos/$RELEASE_VERSION_TAG/VineOS-$RELEASE_VERSION_TAG-debug.apk
+          link_type: package
+
+renovate:
+  stage: test
+  image: ghcr.io/renovatebot/renovate:44.149.1
+  interruptible: false
+  variables:
+    RENOVATE_PLATFORM: gitlab
+    RENOVATE_ENDPOINT: $CI_API_V4_URL
+    RENOVATE_AUTODISCOVER: "true"
+    RENOVATE_AUTODISCOVER_FILTER: $CI_PROJECT_NAMESPACE/*
+    RENOVATE_ONBOARDING: "false"
+    RENOVATE_REQUIRE_CONFIG: required
+  rules:
+    - if: $SCHEDULE_TYPE == "renovate" && $RENOVATE_TOKEN
+  script:
+    - renovate

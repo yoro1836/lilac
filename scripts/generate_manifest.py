@@ -4,7 +4,8 @@
 Reads each .vrom's own embedded manifest.json for the descriptive fields,
 computes the whole-file sha256 the app actually verifies after download
 (not the per-component hashes in the .vrom's internal manifest), and writes
-a ready-to-serve store manifest.json. See docs/ROM_STORE_SETUP.md.
+a ready-to-serve store manifest.json. See ROM_STORE_SETUP.md in the
+VineOS-Documentation repository.
 """
 
 import argparse

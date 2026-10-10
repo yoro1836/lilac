@@ -1,7 +1,7 @@
 # ============================================================
 #  VineOS .gitattributes
 #  Ensures consistent line endings, binary handling, and
-#  correct GitHub language detection across platforms.
+#  correct language detection across platforms.
 # ============================================================
 
 # ── Default: normalize all text files to LF on checkout ──────────────────────
@@ -100,8 +100,8 @@ gradle/wrapper/gradle-wrapper.jar binary
 *.keystore    binary
 *.p12         binary
 
-# ── GitHub Linguist overrides ─────────────────────────────────────────────────
-# Tell GitHub what language this project is, and prevent vendored/generated
+# ── Linguist overrides ────────────────────────────────────────────────────────
+# Tell the host what language this project is, and prevent vendored/generated
 # files from inflating the language stats.
 
 # Mark generated files (Room schemas, build outputs) as generated
@@ -117,7 +117,6 @@ app/src/main/cpp/**     linguist-detectable=true
 
 # Markdown docs aren't "code" for language percentage purposes
 *.md                    linguist-documentation=true
-docs/**                 linguist-documentation=true
 
 # ── Diff drivers ─────────────────────────────────────────────────────────────
 # Use a more useful diff for XML (Android resource files)
