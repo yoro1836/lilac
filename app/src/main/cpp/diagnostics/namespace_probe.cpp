@@ -1,7 +1,6 @@
 #include "namespace_probe.h"
 #include <cerrno>
 #include <cstring>
-#include <jni.h>
 #include <sched.h>
 #include <sys/mount.h>
 #include <sys/wait.h>
@@ -64,12 +63,3 @@ NamespaceProbeResult probe_namespace_support() {
 }
 
 } // namespace vine::diagnostics
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_hexadecinull_vineos_shizuku_VineShizukuService_nativeProbeNamespaces(JNIEnv* env, jobject) {
-    auto r = vine::diagnostics::probe_namespace_support();
-    char buf[256];
-    snprintf(buf, sizeof(buf), "unshare_ok=%d;unshare_errno=%d;mount_ok=%d;mount_errno=%d;uid=%d",
-              r.unshare_ok ? 1 : 0, r.unshare_errno, r.mount_ok ? 1 : 0, r.mount_errno, r.caller_uid);
-    return env->NewStringUTF(buf);
-}

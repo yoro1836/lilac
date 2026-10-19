@@ -33,6 +33,16 @@ class SettingsViewModel @Inject constructor(private val prefs: AppPreferences) :
         partial.copy(allowRootInstances = allowRoot)
     }.combine(prefs.defaultCpuCores) { partial, cpuCores ->
         partial.copy(defaultCpuCores = cpuCores)
+    }.combine(prefs.navButtons) { partial, value ->
+        partial.copy(navButtons = value)
+    }.combine(prefs.screenFit) { partial, value ->
+        partial.copy(screenFit = value)
+    }.combine(prefs.guestResolution) { partial, value ->
+        partial.copy(guestResolution = value)
+    }.combine(prefs.avoidCutout) { partial, value ->
+        partial.copy(avoidCutout = value)
+    }.combine(prefs.guestNetwork) { partial, value ->
+        partial.copy(guestNetwork = value)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(),
@@ -49,6 +59,11 @@ class SettingsViewModel @Inject constructor(private val prefs: AppPreferences) :
             if (newSettings.defaultCpuCores != current.defaultCpuCores) prefs.setDefaultCpuCores(newSettings.defaultCpuCores)
             if (newSettings.showTechnicalInfo != current.showTechnicalInfo) prefs.setShowTechInfo(newSettings.showTechnicalInfo)
             if (newSettings.allowRootInstances != current.allowRootInstances) prefs.setAllowRootInstances(newSettings.allowRootInstances)
+            if (newSettings.navButtons != current.navButtons) prefs.setNavButtons(newSettings.navButtons)
+            if (newSettings.screenFit != current.screenFit) prefs.setScreenFit(newSettings.screenFit)
+            if (newSettings.guestResolution != current.guestResolution) prefs.setGuestResolution(newSettings.guestResolution)
+            if (newSettings.avoidCutout != current.avoidCutout) prefs.setAvoidCutout(newSettings.avoidCutout)
+            if (newSettings.guestNetwork != current.guestNetwork) prefs.setGuestNetwork(newSettings.guestNetwork)
         }
     }
 }

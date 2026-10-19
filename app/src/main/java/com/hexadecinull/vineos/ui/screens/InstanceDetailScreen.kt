@@ -24,7 +24,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hexadecinull.vineos.data.models.VMStatus
+import com.hexadecinull.vineos.domain.StorageSizing
+import com.hexadecinull.vineos.helper.SnapshotInfo
 import com.hexadecinull.vineos.ui.viewmodel.InstanceDetailViewModel
+import com.hexadecinull.vineos.ui.viewmodel.SnapshotsUiState
 import java.text.DateFormat
 import java.util.Date
 
@@ -39,10 +42,21 @@ fun InstanceDetailScreen(
     vm: InstanceDetailViewModel = hiltViewModel(),
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
+    val snapshots by vm.snapshots.collectAsStateWithLifecycle()
+    val snackbarHost = remember { SnackbarHostState() }
     var showDiagnostics by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
-    LaunchedEffect(instanceId) { vm.load(instanceId) }
+    LaunchedEffect(instanceId) {
+        vm.load(instanceId)
+        vm.loadSnapshots()
+    }
+    LaunchedEffect(instanceId) { vm.observeSnapshotEvents() }
+    LaunchedEffect(snapshots.message) {
+        val message = snapshots.message ?: return@LaunchedEffect
+        snackbarHost.showSnackbar(message)
+        vm.clearSnapshotMessage()
+    }
 
     Scaffold(
         topBar = {
@@ -55,6 +69,7 @@ fun InstanceDetailScreen(
                 },
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHost) },
         modifier = modifier,
     ) { padding ->
         val instance = uiState.instance
@@ -86,7 +101,7 @@ fun InstanceDetailScreen(
             }
 
             DetailRow("RAM", "${instance.ramMb} MB")
-            DetailRow("Storage", "${instance.storageMb} MB")
+            DetailRow("Storage", StorageSizing.format(instance.storageMb))
             DetailRow("Root access", if (instance.isRooted) "Enabled" else "Disabled")
             DetailRow("Created", DateFormat.getDateTimeInstance().format(Date(instance.createdAt)))
             DetailRow("Last used", DateFormat.getDateTimeInstance().format(Date(instance.lastUsedAt)))
@@ -119,6 +134,14 @@ fun InstanceDetailScreen(
                     Icon(Icons.Filled.Delete, contentDescription = "Delete")
                 }
             }
+
+            SnapshotsSection(
+                state = snapshots,
+                running = instance.status != VMStatus.STOPPED && instance.status != VMStatus.ERROR,
+                onCreate = vm::createSnapshot,
+                onRestore = vm::restoreSnapshot,
+                onDelete = vm::deleteSnapshot,
+            )
 
             TextButton(onClick = {
                 showDiagnostics = !showDiagnostics
@@ -170,5 +193,75 @@ private fun DetailRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun SnapshotsSection(
+    state: SnapshotsUiState,
+    running: Boolean,
+    onCreate: () -> Unit,
+    onRestore: (String) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    var pendingRestore by remember { mutableStateOf<String?>(null) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Snapshots", style = MaterialTheme.typography.titleSmall)
+            OutlinedButton(onClick = onCreate, enabled = state.busy == null) { Text("Create snapshot") }
+        }
+        if (state.busy != null) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Text(state.busy, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        if (state.items.isEmpty()) {
+            Text(
+                "A snapshot saves the instance's disk so you can go back to it later.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        state.items.forEach { item ->
+            SnapshotRow(
+                item = item,
+                canRestore = !running && state.busy == null,
+                onRestore = { pendingRestore = item.name },
+                onDelete = { onDelete(item.name) },
+            )
+        }
+    }
+
+    pendingRestore?.let { name ->
+        AlertDialog(
+            onDismissRequest = { pendingRestore = null },
+            title = { Text("Restore $name?") },
+            text = { Text("The instance's current disk is replaced by this snapshot. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRestore(name)
+                    pendingRestore = null
+                }) { Text("Restore") }
+            },
+            dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun SnapshotRow(item: SnapshotInfo, canRestore: Boolean, onRestore: () -> Unit, onDelete: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(item.name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "${StorageSizing.format((item.usedBytes / (1024 * 1024)).toInt().coerceAtLeast(1))} used, " +
+                    DateFormat.getDateTimeInstance().format(Date(item.createdAtSec * 1000)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = onRestore, enabled = canRestore) { Text("Restore") }
+        IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, contentDescription = "Delete snapshot") }
     }
 }

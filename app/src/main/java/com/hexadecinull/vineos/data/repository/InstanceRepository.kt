@@ -20,6 +20,8 @@ class InstanceRepository @Inject constructor(private val dao: VMInstanceDao) {
 
     suspend fun touchLastUsed(id: String) = dao.updateLastUsed(id)
 
+    suspend fun resetAllStatuses() = dao.resetAllStatuses()
+
     suspend fun delete(instance: VMInstance) = dao.delete(instance)
 
     suspend fun deleteById(id: String) = dao.deleteById(id)

@@ -5,6 +5,7 @@ import com.hexadecinull.vineos.data.models.VMInstance
 import com.hexadecinull.vineos.data.models.VMStatus
 import com.hexadecinull.vineos.data.repository.InstanceRepository
 import com.hexadecinull.vineos.domain.VineVMManager
+import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -100,7 +101,7 @@ class InstanceDetailViewModelTest {
     @Test
     fun `refreshDiagnostics surfaces vmManager diagnostics text`() = runTest(testDispatcher) {
         viewModel.load("id-1")
-        every { vmManager.getDiagnostics("id-1") } returns "mount table: ok"
+        coEvery { vmManager.fetchDiagnostics("id-1") } returns "mount table: ok"
         viewModel.refreshDiagnostics()
         val state = viewModel.uiState.first { it.diagnostics.isNotBlank() }
         assertThat(state.diagnostics).isEqualTo("mount table: ok")

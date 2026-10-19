@@ -7,7 +7,11 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.hexadecinull.vineos.data.models.GuestResolution
+import com.hexadecinull.vineos.data.models.NavButtonsMode
+import com.hexadecinull.vineos.data.models.ScreenFit
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.IOException
 import javax.inject.Inject
@@ -30,6 +34,11 @@ class AppPreferences @Inject constructor(@ApplicationContext private val context
         val DEFAULT_CPU_CORES = intPreferencesKey("default_cpu_cores")
         val SHOW_TECH_INFO = booleanPreferencesKey("show_tech_info")
         val ALLOW_ROOT = booleanPreferencesKey("allow_root_instances")
+        val NAV_BUTTONS = stringPreferencesKey("nav_buttons_mode")
+        val SCREEN_FIT = stringPreferencesKey("screen_fit")
+        val GUEST_RESOLUTION = stringPreferencesKey("guest_resolution")
+        val AVOID_CUTOUT = booleanPreferencesKey("avoid_cutout")
+        val GUEST_NETWORK = booleanPreferencesKey("guest_network")
     }
 
     companion object {
@@ -66,6 +75,26 @@ class AppPreferences @Inject constructor(@ApplicationContext private val context
         .catchIO()
         .map { it[Keys.ALLOW_ROOT] ?: false }
 
+    val navButtons: Flow<NavButtonsMode> = store.data
+        .catchIO()
+        .map { NavButtonsMode.fromName(it[Keys.NAV_BUTTONS]) }
+
+    val screenFit: Flow<ScreenFit> = store.data
+        .catchIO()
+        .map { ScreenFit.fromName(it[Keys.SCREEN_FIT]) }
+
+    val guestResolution: Flow<GuestResolution> = store.data
+        .catchIO()
+        .map { GuestResolution.fromName(it[Keys.GUEST_RESOLUTION]) }
+
+    val avoidCutout: Flow<Boolean> = store.data
+        .catchIO()
+        .map { it[Keys.AVOID_CUTOUT] ?: false }
+
+    val guestNetwork: Flow<Boolean> = store.data
+        .catchIO()
+        .map { it[Keys.GUEST_NETWORK] ?: true }
+
     suspend fun setDynamicColor(value: Boolean) = store.edit { it[Keys.DYNAMIC_COLOR] = value }
 
     suspend fun setKeepScreenOn(value: Boolean) = store.edit { it[Keys.KEEP_SCREEN_ON] = value }
@@ -79,6 +108,16 @@ class AppPreferences @Inject constructor(@ApplicationContext private val context
     suspend fun setShowTechInfo(value: Boolean) = store.edit { it[Keys.SHOW_TECH_INFO] = value }
 
     suspend fun setAllowRootInstances(value: Boolean) = store.edit { it[Keys.ALLOW_ROOT] = value }
+
+    suspend fun setNavButtons(value: NavButtonsMode) = store.edit { it[Keys.NAV_BUTTONS] = value.name }
+
+    suspend fun setScreenFit(value: ScreenFit) = store.edit { it[Keys.SCREEN_FIT] = value.name }
+
+    suspend fun setGuestResolution(value: GuestResolution) = store.edit { it[Keys.GUEST_RESOLUTION] = value.name }
+
+    suspend fun setAvoidCutout(value: Boolean) = store.edit { it[Keys.AVOID_CUTOUT] = value }
+
+    suspend fun setGuestNetwork(value: Boolean) = store.edit { it[Keys.GUEST_NETWORK] = value }
 
     private fun Flow<Preferences>.catchIO() = catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
 }

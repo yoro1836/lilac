@@ -1,0 +1,26 @@
+# VineOS guest additions, init loads this from the ramdisk root when ro.hardware is vine
+
+service vine-boot-marker /system/bin/sh -c "echo 1 > /vine/boot_completed"
+    class late_start
+    user root
+    group root
+    disabled
+    oneshot
+
+service vine-net /system/bin/sh /system/etc/vine/net.sh
+    class late_start
+    user root
+    group root
+    disabled
+    oneshot
+
+service vine-agent /system/bin/app_process -Djava.class.path=/system/framework/vine-agent.jar /system/bin com.hexadecinull.vineos.agent.VineAgent
+    class late_start
+    user root
+    group root
+    disabled
+
+on property:sys.boot_completed=1
+    start vine-net
+    start vine-agent
+    start vine-boot-marker

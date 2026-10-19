@@ -3,7 +3,9 @@ package com.hexadecinull.vineos.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
@@ -16,6 +18,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.hexadecinull.vineos.domain.StorageSizing
+import com.hexadecinull.vineos.ui.components.StorageSizePicker
+import com.hexadecinull.vineos.ui.components.rememberMaxStorageMb
 import com.hexadecinull.vineos.ui.viewmodel.CreateInstanceState
 import com.hexadecinull.vineos.ui.viewmodel.CreateInstanceViewModel
 
@@ -50,6 +55,8 @@ fun CreateInstanceScreen(
     val isFormValid by vm.isFormValid.collectAsStateWithLifecycle()
     val state by vm.state.collectAsStateWithLifecycle()
 
+    val maxStorageMb = rememberMaxStorageMb()
+
     LaunchedEffect(romId) { vm.loadRom(romId) }
     LaunchedEffect(state) {
         val s = state
@@ -81,6 +88,7 @@ fun CreateInstanceScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
@@ -127,14 +135,13 @@ fun CreateInstanceScreen(
                 onChange = { vm.selectedRamMb.value = it },
             )
 
-            SliderSetting(
-                label = "Storage",
-                value = storage,
-                valueLabel = "$storage MB",
-                range = 2048f..16384f,
-                step = 1024,
-                onChange = { vm.selectedStorageMb.value = it },
-            )
+            Column {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Storage", style = MaterialTheme.typography.labelLarge)
+                    Text(StorageSizing.format(storage), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                }
+                StorageSizePicker(valueMb = storage, maxMb = maxStorageMb, onValueChange = { vm.selectedStorageMb.value = it })
+            }
 
             SliderSetting(
                 label = "CPU Cores",
@@ -171,7 +178,17 @@ fun CreateInstanceScreen(
                 )
             }
 
-            Spacer(Modifier.weight(1f))
+            val creating = state as? CreateInstanceState.Creating
+            if (creating != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LinearProgressIndicator(progress = { creating.progress }, modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "${creating.step} (${(creating.progress * 100).toInt()}%)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
 
             Button(
                 onClick = { vm.createInstance() },

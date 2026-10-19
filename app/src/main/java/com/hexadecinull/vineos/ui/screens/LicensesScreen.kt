@@ -28,7 +28,7 @@ import kotlinx.coroutines.withContext
 fun LicensesScreen(onBack: () -> Unit, onLibraryClick: (Int) -> Unit, modifier: Modifier = Modifier) {
     Scaffold(
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text("Licenses") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -72,7 +72,7 @@ fun LicenseDetailScreen(libraryIndex: Int, onBack: () -> Unit, modifier: Modifie
 
     Scaffold(
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text(lib.name) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {

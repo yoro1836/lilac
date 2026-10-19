@@ -96,6 +96,21 @@ unit-tests:
     reports:
       junit: app/build/test-results/testDebugUnitTest/*.xml
 
+native-display-tests:
+  extends: .rules-ci
+  stage: test
+  image: gcc:14
+  script:
+    - sh app/src/main/cpp/tests/native/run_display_tests.sh
+
+rom-kit-tests:
+  extends: .rules-ci
+  stage: test
+  script:
+    - sh rom/agent/test/run_tests.sh
+    - apt-get update -qq && apt-get install -y -qq python3 > /dev/null
+    - python3 -m py_compile rom/package_vrom.py scripts/generate_manifest.py
+
 secret_detection:
   stage: test
   rules:

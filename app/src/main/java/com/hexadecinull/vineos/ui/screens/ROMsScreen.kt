@@ -53,7 +53,7 @@ fun ROMsScreen(
 
     Scaffold(
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text("ROMs") },
                 actions = {
                     IconButton(onClick = { pickRomLauncher.launch(arrayOf("*/*")) }) {

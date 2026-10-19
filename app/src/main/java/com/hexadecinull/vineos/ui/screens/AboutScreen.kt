@@ -18,7 +18,7 @@ import com.hexadecinull.vineos.ui.viewmodel.AboutInfoSection
 fun AboutScreen(sections: List<AboutInfoSection>, onBack: () -> Unit, onLicenses: () -> Unit, modifier: Modifier = Modifier) {
     Scaffold(
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text("About VineOS") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {

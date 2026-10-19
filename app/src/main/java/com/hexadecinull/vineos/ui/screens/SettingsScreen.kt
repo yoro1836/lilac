@@ -3,6 +3,7 @@ package com.hexadecinull.vineos.ui.screens
 import android.os.Build
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -14,7 +15,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.hexadecinull.vineos.BuildConfig
+import com.hexadecinull.vineos.data.models.GuestResolution
+import com.hexadecinull.vineos.data.models.NavButtonsMode
+import com.hexadecinull.vineos.data.models.ScreenFit
 import com.hexadecinull.vineos.shizuku.ShizukuStatus
+import com.hexadecinull.vineos.ui.components.StorageSizePicker
+import com.hexadecinull.vineos.ui.components.rememberMaxStorageMb
 import com.hexadecinull.vineos.ui.viewmodel.ProbeState
 
 data class AppSettings(
@@ -25,6 +31,11 @@ data class AppSettings(
     val defaultCpuCores: Int = 0,
     val showTechnicalInfo: Boolean = false,
     val allowRootInstances: Boolean = false,
+    val navButtons: NavButtonsMode = NavButtonsMode.HIDDEN,
+    val screenFit: ScreenFit = ScreenFit.FILL,
+    val guestResolution: GuestResolution = GuestResolution.BALANCED,
+    val avoidCutout: Boolean = false,
+    val guestNetwork: Boolean = true,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -33,15 +44,17 @@ fun SettingsScreen(
     settings: AppSettings,
     onSettingsChange: (AppSettings) -> Unit,
     onAboutClick: () -> Unit,
+    onOpenShortcuts: () -> Unit,
     shizukuStatus: ShizukuStatus,
     onRequestShizukuPermission: () -> Unit,
     probeState: ProbeState,
     onRunProbe: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val maxStorageMb = rememberMaxStorageMb()
     Scaffold(
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text("Settings") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
@@ -79,14 +92,12 @@ fun SettingsScreen(
                     steps = 6,  // 512, 768, 1024, 1536, 2048, 3072, 4096
                     onValueChange = { onSettingsChange(settings.copy(defaultRamMb = it.toInt())) }
                 )
-                SliderSettingsItem(
+                StorageSettingsItem(
                     icon = Icons.Outlined.Storage,
                     title = "Default Storage",
-                    subtitle = "${settings.defaultStorageMb} MB",
-                    value = settings.defaultStorageMb.toFloat(),
-                    valueRange = 2048f..16384f,
-                    steps = 6,  // 2048, 4096, 6144, ... 16384
-                    onValueChange = { onSettingsChange(settings.copy(defaultStorageMb = it.toInt())) }
+                    valueMb = settings.defaultStorageMb,
+                    maxMb = maxStorageMb,
+                    onValueChange = { onSettingsChange(settings.copy(defaultStorageMb = it)) }
                 )
                 SliderSettingsItem(
                     icon = Icons.Outlined.DeveloperBoard,
@@ -106,7 +117,66 @@ fun SettingsScreen(
                 )
             }
 
+            SettingsSection(title = "Display") {
+                ChoiceSettingsItem(
+                    icon = Icons.Outlined.TouchApp,
+                    title = "On-screen buttons",
+                    options = NavButtonsMode.entries,
+                    selected = settings.navButtons,
+                    label = { it.label },
+                    description = { it.description },
+                    onSelect = { onSettingsChange(settings.copy(navButtons = it)) },
+                )
+                ChoiceSettingsItem(
+                    icon = Icons.Outlined.Fullscreen,
+                    title = "Screen fit",
+                    options = ScreenFit.entries,
+                    selected = settings.screenFit,
+                    label = { it.label },
+                    description = { it.description },
+                    onSelect = { onSettingsChange(settings.copy(screenFit = it)) },
+                )
+                ChoiceSettingsItem(
+                    icon = Icons.Outlined.HighQuality,
+                    title = "Guest resolution",
+                    options = GuestResolution.entries,
+                    selected = settings.guestResolution,
+                    label = { it.label },
+                    description = { it.description },
+                    onSelect = { onSettingsChange(settings.copy(guestResolution = it)) },
+                )
+                SwitchSettingsItem(
+                    icon = Icons.Outlined.PhoneAndroid,
+                    title = "Avoid camera cutout",
+                    subtitle = "Keep the guest screen below the notch or camera hole",
+                    checked = settings.avoidCutout,
+                    onCheckedChange = { onSettingsChange(settings.copy(avoidCutout = it)) }
+                )
+                Text(
+                    "Screen fit and resolution apply the next time an instance starts.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            }
+
+            SettingsSection(title = "Apps") {
+                NavigateSettingsItem(
+                    icon = Icons.Outlined.AddToHomeScreen,
+                    title = "App Shortcuts",
+                    subtitle = "Put an app from an instance on your home screen",
+                    onClick = onOpenShortcuts,
+                )
+            }
+
             SettingsSection(title = "Advanced") {
+                SwitchSettingsItem(
+                    icon = Icons.Outlined.Wifi,
+                    title = "Guest internet access",
+                    subtitle = "Give instances a private network behind your phone's connection",
+                    checked = settings.guestNetwork,
+                    onCheckedChange = { onSettingsChange(settings.copy(guestNetwork = it)) }
+                )
                 SwitchSettingsItem(
                     icon = Icons.Outlined.Code,
                     title = "Show Technical Info",
@@ -215,6 +285,83 @@ fun SliderSettingsItem(
             valueRange = valueRange,
             steps = steps,
             modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+fun StorageSettingsItem(icon: ImageVector, title: String, valueMb: Int, maxMb: Int, onValueChange: (Int) -> Unit) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    com.hexadecinull.vineos.domain.StorageSizing.format(valueMb),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        StorageSizePicker(valueMb = valueMb, maxMb = maxMb, onValueChange = onValueChange)
+    }
+}
+
+@Composable
+fun <T> ChoiceSettingsItem(
+    icon: ImageVector,
+    title: String,
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    description: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Text(
+                label(selected),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        leadingContent = { Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+        modifier = Modifier.clickable { open = true },
+    )
+    if (open) {
+        AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text(title) },
+            text = {
+                Column {
+                    options.forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSelect(option)
+                                    open = false
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = option == selected, onClick = null)
+                            Spacer(Modifier.width(12.dp))
+                            Column {
+                                Text(label(option), style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    description(option),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { open = false }) { Text("Close") } },
         )
     }
 }

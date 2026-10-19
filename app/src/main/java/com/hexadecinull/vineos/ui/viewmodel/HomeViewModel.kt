@@ -55,6 +55,7 @@ class HomeViewModel @Inject constructor(private val instanceRepo: InstanceReposi
             if (instance.status != VMStatus.STOPPED) {
                 vmManager.killInstance(instance.id)
             }
+            vmManager.deleteInstanceFiles(instance)
             instanceRepo.delete(instance)
         }
     }

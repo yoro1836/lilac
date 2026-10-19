@@ -50,6 +50,12 @@ individual apps, VineOS virtualizes the full Android stack: its own
 `init`, `Zygote`, `SurfaceFlinger`, `ServiceManager`, and everything else.
 You get a real second phone inside your phone.
 
+> **Status.** The container engine boots a test ROM through real Linux
+> namespaces and mounts, and the app, helper and guest protocols are unit
+> tested. No real Android system image has booted inside VineOS yet, so the
+> first bootable ROM is the open milestone. The
+> [`rom/`](rom/README.md) folder holds the guest side kit a ROM needs.
+
 **Why VineOS over alternatives like VPhoneOS or VMOS?**
 
 | Feature | VineOS | VPhoneOS | VMOS | Virtual Master |
@@ -75,8 +81,11 @@ You get a real second phone inside your phone.
 - 🖥️ **Multi-host support**: builds and runs on arm64-v8a, armeabi-v7a, x86_64, and x86 devices, not just ARM
 - 🎨 **Material You**: dynamic color from your wallpaper on Android 12+, static vine-green fallback on 8-11
 - ⚡ **Lightweight**: zero background overhead when no VM is running, no persistent daemons
-- 🔒 **Isolated**: PID, mount, UTS, and IPC namespace separation
+- 🔒 **Isolated**: PID, mount, UTS, IPC, and network namespace separation
 - 🌱 **Multi-instance**: run multiple independent VMs simultaneously
+- 🔗 **App shortcuts**: pin any app of an instance to your home screen, a tap starts the instance and opens the app
+- 💾 **Big storage**: instance storage up to your free space, the disk is a sparse file so it only uses what the guest writes
+- 🖥️ **Fullscreen guest**: the guest screen fills the phone, the three on-screen navigation buttons are hidden by default
 - 🔧 **Root support**: optional Magisk/root inside instances (requires rooted host)
 - ⚡ **Shizuku**: optional, no-root privilege probe via ADB/Wireless Debugging (see [NOROOT_RESEARCH.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/reference/NOROOT_RESEARCH.md))
 - 📱 **minSdk 26, targetSdk 37**: supports Android 8.0 through Android 17
@@ -138,7 +147,7 @@ VineOS is split across three GitLab repositories:
 
 | Repository | What it contains |
 |---|---|
-| [VineOS](https://gitlab.com/Hexadecinull/VineOS/VineOS) | The Android app, the native runtime, and CI (this repository) |
+| [VineOS](https://gitlab.com/Hexadecinull/VineOS/VineOS) | The Android app, the native runtime, the guest side ROM kit (`rom/`), and CI (this repository) |
 | [VineOS-Website](https://gitlab.com/Hexadecinull/VineOS/VineOS-Website) | The project website |
 | [VineOS-Documentation](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation) | Guides, reference, and project policies |
 
@@ -154,6 +163,9 @@ VineOS is split across three GitLab repositories:
 - [x] Room DB + ViewModels + DataStore preferences
 - [x] ROM downloader (manifest fetch, streaming download, SHA-256 verification)
 - [x] Multi-host-ABI support (arm64-v8a, armeabi-v7a, x86_64, x86)
+- [x] Root helper process that owns every guest, spoken to over stdin and stdout
+- [x] Engine tested on a real kernel with a fake ROM (namespaces, loop mounts, ext4 `/data`, cgroups, NAT, snapshots)
+- [x] ROM kit for the guest side: init patch notes, guest agent, framebuffer writer, `.vrom` packer (`rom/`)
 - [ ] First bootable Android 7.1.2 ROM image
 
 ### Phase 2: Display & Input
@@ -161,12 +173,14 @@ VineOS is split across three GitLab repositories:
 - [x] RGB565 to RGBA8888 conversion for Android 7.x guests
 - [x] Single-touch forwarding, synced to the guest's real display resolution
 - [x] Hardware key forwarding (back, home, volume, recents)
-- [ ] Multi-touch forwarding (MT type B, up to 10 fingers)
-- [ ] Clipboard sharing host to guest
+- [x] Multi-touch forwarding, up to 10 fingers, through the guest agent (needs a ROM that runs it)
+- [x] Hidden on-screen navigation buttons and a guest screen that fills the phone
+- [ ] Clipboard sharing host to guest (guest agent side written, app side pending)
 
 ### Phase 3: Storage & ROMs
-- [ ] Writable `/data` partition (overlayfs on top of read-only ROM)
-- [ ] Instance snapshot / restore
+- [x] Writable `/data` partition (sparse ext4 image per instance, sizes beyond 16 GB)
+- [x] Instance snapshot / restore
+- [x] App shortcuts on the home screen
 - [ ] Android 9, 11, 12 ROM images
 - [ ] ROM CDN + in-app download UI completion
 
@@ -186,9 +200,9 @@ VineOS is split across three GitLab repositories:
 ## FAQ
 
 **Does VineOS require root?**
-Root is not required for the planned no-root path (Phase 4). The current
-implementation requires `CAP_SYS_ADMIN` for `unshare()` and `mount()`.
-Root is optional, only for Magisk inside instances.
+Today yes. The engine runs in a small helper started with `su`, because
+`unshare()` and `mount()` need `CAP_SYS_ADMIN`. The no-root path is Phase 4
+and is not built yet. Root inside an instance (Magisk) is a separate, optional thing.
 
 **Does VineOS work on arm64-only phones without 32-bit support?**
 Yes, this is one of the core things VineOS is built for. We're aiming to

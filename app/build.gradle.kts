@@ -39,7 +39,7 @@ android {
             cmake {
                 cppFlags += listOf("-std=c++17", "-Wall", "-Wextra", "-Wpedantic")
                 arguments += listOf(
-                    "-DANDROID_STL=c++_shared",
+                    "-DANDROID_STL=c++_static",
                     "-DANDROID_PLATFORM=android-26",
                 )
             }
@@ -108,6 +108,10 @@ android {
     }
 
     packaging {
+        jniLibs {
+            // libvine_helper.so is an executable that su starts, so it has to be extracted to disk instead of mapped from the APK
+            useLegacyPackaging = true
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }

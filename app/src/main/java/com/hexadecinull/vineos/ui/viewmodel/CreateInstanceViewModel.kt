@@ -8,9 +8,11 @@ import com.hexadecinull.vineos.data.models.VMStatus
 import com.hexadecinull.vineos.data.repository.AppPreferences
 import com.hexadecinull.vineos.data.repository.InstanceRepository
 import com.hexadecinull.vineos.data.repository.ROMRepository
-import com.hexadecinull.vineos.native.VineRuntime
+import com.hexadecinull.vineos.domain.InstanceProvisioner
+import com.hexadecinull.vineos.domain.StorageSizing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
+import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -24,7 +26,7 @@ import kotlinx.coroutines.launch
 sealed class CreateInstanceState {
     data object Idle : CreateInstanceState()
 
-    data object Creating : CreateInstanceState()
+    data class Creating(val progress: Float = 0f, val step: String = "Preparing") : CreateInstanceState()
 
     data class Success(val instanceId: String) : CreateInstanceState()
 
@@ -36,6 +38,7 @@ class CreateInstanceViewModel @Inject constructor(
     private val instanceRepo: InstanceRepository,
     private val romRepo: ROMRepository,
     private val prefs: AppPreferences,
+    private val provisioner: InstanceProvisioner,
 ) : ViewModel() {
     private val stateFlow = MutableStateFlow<CreateInstanceState>(CreateInstanceState.Idle)
     val state: StateFlow<CreateInstanceState> = stateFlow.asStateFlow()
@@ -75,45 +78,40 @@ class CreateInstanceViewModel @Inject constructor(
     fun createInstance() {
         val selectedRom = romFlow.value ?: return
         if (stateFlow.value is CreateInstanceState.Creating) return
-        stateFlow.value = CreateInstanceState.Creating
+        val romFile = selectedRom.localPath?.let { File(it) }?.takeIf { it.isFile }
+        if (romFile == null) {
+            stateFlow.value = CreateInstanceState.Error("This ROM is not downloaded yet. Download it from the ROMs tab first.")
+            return
+        }
+        stateFlow.value = CreateInstanceState.Creating()
 
         viewModelScope.launch {
-            val name = instanceName.value.trim()
-            val ram = selectedRamMb.value
-            val storage = selectedStorageMb.value
-            val cpuCores = selectedCpuCores.value
-            val isRooted = allowRootInstances.value && selectedRoot.value
-
-            val instancePath = VineRuntime.createInstance(
-                instanceId = "",
-                romImagePath = selectedRom.localPath ?: "",
-                storageMb = storage,
-            )
-
-            if (instancePath == null) {
-                stateFlow.value = CreateInstanceState.Error(
-                    "Failed to create instance storage. Check available disk space.",
-                )
-                return@launch
+            val instanceId = UUID.randomUUID().toString()
+            val storage = StorageSizing.clamp(selectedStorageMb.value, StorageSizing.maxMb(provisioner.freeBytes()))
+            val result = provisioner.create(romFile, instanceId) { progress ->
+                stateFlow.value = CreateInstanceState.Creating(progress.fraction, progress.step)
             }
-
-            val instanceId = File(instancePath).name
-            val instance = VMInstance(
-                id = instanceId,
-                name = name,
-                romId = selectedRom.id,
-                romVersion = selectedRom.androidVersion,
-                storagePath = instancePath,
-                status = VMStatus.STOPPED,
-                ramMb = ram,
-                cpuCores = cpuCores,
-                storageMb = storage,
-                androidVersionDisplay = selectedRom.displayName,
-                isRooted = isRooted,
-                iconEmoji = selectedEmoji.value,
-            )
-            instanceRepo.save(instance)
-            stateFlow.value = CreateInstanceState.Success(instanceId)
+            result.onFailure { error ->
+                stateFlow.value = CreateInstanceState.Error(error.message ?: "Could not create the instance.")
+            }
+            result.onSuccess { dir ->
+                val instance = VMInstance(
+                    id = instanceId,
+                    name = instanceName.value.trim(),
+                    romId = selectedRom.id,
+                    romVersion = selectedRom.androidVersion,
+                    storagePath = dir.absolutePath,
+                    status = VMStatus.STOPPED,
+                    ramMb = selectedRamMb.value,
+                    cpuCores = selectedCpuCores.value,
+                    storageMb = storage,
+                    androidVersionDisplay = selectedRom.displayName,
+                    isRooted = allowRootInstances.value && selectedRoot.value,
+                    iconEmoji = selectedEmoji.value,
+                )
+                instanceRepo.save(instance)
+                stateFlow.value = CreateInstanceState.Success(instanceId)
+            }
         }
     }
 

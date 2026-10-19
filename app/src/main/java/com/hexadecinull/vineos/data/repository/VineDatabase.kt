@@ -42,6 +42,10 @@ interface VMInstanceDao {
     @Query("UPDATE vm_instances SET lastUsedAt = :timestamp WHERE id = :id")
     suspend fun updateLastUsed(id: String, timestamp: Long = System.currentTimeMillis())
 
+    // Nothing can be running right after the app process starts, so stale states from a crash or reboot are cleared
+    @Query("UPDATE vm_instances SET status = 'STOPPED' WHERE status != 'STOPPED'")
+    suspend fun resetAllStatuses()
+
     @Delete
     suspend fun delete(instance: VMInstance)
 
