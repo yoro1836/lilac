@@ -203,6 +203,11 @@ public:
         return f;
     }
 
+    // The mapped toplevel's surface id, 0 if none
+    uint32_t toplevel_surface() const;
+    // Seat events for this client's touch and keyboard objects
+    void deliver(const InputEvent& e);
+
 private:
     void dispatch(uint32_t id, uint16_t opcode, const uint8_t* body, size_t len);
     void reap() {
@@ -500,24 +505,36 @@ struct Output : Object {
 };
 
 struct InputDevice : Object {
+    enum Kind { Pointer, Keyboard, Touch };
+    Kind kind = Pointer;
+    uint32_t entered = 0; // keyboard: surface it entered
     void request(Msg& m) override {
         // wl_pointer.release is opcode 1, keyboard/touch release opcode 0
-        if (m.opcode == 1 || (m.opcode == 0 && !pointer)) client->destroy(id);
+        if (m.opcode == 1 || (m.opcode == 0 && kind != Pointer)) client->destroy(id);
     }
-    bool pointer = false;
+    void keymap() {
+        // No keymap: the hwcomposer reads evdev codes as they are
+        const int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (fd >= 0) client->event(id, 0).u32(0 /*no_keymap*/).fd(fd).u32(0);
+        if (version >= 4) client->event(id, 5).i32(0).i32(0); // repeat_info: no repeat
+    }
 };
+
+constexpr uint32_t kSeatKeyboard = 2, kSeatTouch = 4;
 
 struct Seat : Object {
     void request(Msg& m) override {
         if (m.opcode <= 2) {
             InputDevice* d = client->add<InputDevice>(m.u32(), version);
-            if (d) d->pointer = m.opcode == 0;
+            if (!d) return;
+            d->kind = (InputDevice::Kind)m.opcode;
+            if (d->kind == InputDevice::Keyboard) d->keymap();
         } else if (m.opcode == 3) {
             client->destroy(id);
         }
     }
     void announce() {
-        client->event(id, 0).u32(0); // no input devices yet
+        client->event(id, 0).u32(kSeatKeyboard | kSeatTouch);
         if (version >= 2) client->event(id, 1).str("seat0");
     }
 };
@@ -564,6 +581,46 @@ struct DisplayObj : Object {
         }
     }
 };
+
+// ---- input ------------------------------------------------------------
+
+uint32_t Client::toplevel_surface() const {
+    for (const auto& [oid, obj] : objects_) {
+        const auto* s = dynamic_cast<const Surface*>(obj.get());
+        if (s && s->xdg && s->xdg->toplevel && s->initial_commit_done) return oid;
+    }
+    return 0;
+}
+
+void Client::deliver(const InputEvent& e) {
+    const uint32_t surface = toplevel_surface();
+    if (!surface) return;
+    FrameSink* sink = server_->sink();
+    auto fixed = [](double v) { return (int32_t)(v * 256.0); };
+    const int32_t x = fixed(e.x * sink->width()), y = fixed(e.y * sink->height());
+    const uint32_t t = now_ms();
+    for (const auto& [oid, obj] : objects_) {
+        auto* d = dynamic_cast<InputDevice*>(obj.get());
+        if (!d) continue;
+        if (d->kind == InputDevice::Touch) {
+            switch (e.kind) {
+            case InputEvent::TouchDown: event(oid, 0).u32(next_serial()).u32(t).u32(surface).i32(e.id).i32(x).i32(y); break;
+            case InputEvent::TouchUp: event(oid, 1).u32(next_serial()).u32(t).i32(e.id); break;
+            case InputEvent::TouchMotion: event(oid, 2).u32(t).i32(e.id).i32(x).i32(y); break;
+            case InputEvent::TouchFrame: event(oid, 3); break;
+            case InputEvent::TouchCancel: event(oid, 4); break;
+            case InputEvent::Key: break;
+            }
+        } else if (d->kind == InputDevice::Keyboard && e.kind == InputEvent::Key) {
+            if (d->entered != surface) {
+                event(oid, 1).u32(next_serial()).u32(surface).arr(nullptr, 0);
+                d->entered = surface;
+            }
+            event(oid, 3).u32(next_serial()).u32(t).u32(e.key).u32(e.down ? 1 : 0);
+        }
+    }
+    flush();
+}
 
 // ---- connection -------------------------------------------------------
 
@@ -660,6 +717,11 @@ Server::Server(FrameSink* sink, Log log) : sink_(sink), log_(std::move(log)) {
 
 Server::~Server() {
     clients_.clear();
+    for (auto& in : inputs_) close(in.fd);
+    if (input_fd_ >= 0) {
+        close(input_fd_);
+        unlink(input_path_.c_str());
+    }
     if (listen_fd_ >= 0) {
         close(listen_fd_);
         unlink(path_.c_str());
@@ -699,11 +761,77 @@ void Server::accept_client() {
     log("wayland client connected");
 }
 
+bool Server::listen_input(const std::string& path, std::string* error) {
+    sockaddr_un sa{};
+    sa.sun_family = AF_UNIX;
+    if (path.size() >= sizeof sa.sun_path) {
+        if (error) *error = "socket path too long: " + path;
+        return false;
+    }
+    memcpy(sa.sun_path, path.c_str(), path.size() + 1);
+    const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (fd < 0) {
+        if (error) *error = std::string("socket: ") + strerror(errno);
+        return false;
+    }
+    unlink(path.c_str());
+    if (bind(fd, reinterpret_cast<sockaddr*>(&sa), sizeof sa) != 0 || ::listen(fd, 4) != 0) {
+        if (error) *error = "listen on " + path + ": " + strerror(errno);
+        close(fd);
+        return false;
+    }
+    input_fd_ = fd;
+    input_path_ = path;
+    return true;
+}
+
+void Server::accept_input() {
+    const int fd = accept4(input_fd_, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+    if (fd >= 0) inputs_.push_back({fd, {}});
+}
+
+bool Server::read_input(InputConn& c) {
+    char buf[4096];
+    const ssize_t n = read(c.fd, buf, sizeof buf);
+    if (n < 0) return errno == EAGAIN || errno == EINTR;
+    if (n == 0) return false;
+    c.buf.append(buf, (size_t)n);
+    size_t start = 0;
+    for (size_t nl; (nl = c.buf.find('\n', start)) != std::string::npos; start = nl + 1) {
+        std::vector<InputEvent> evs;
+        std::string error;
+        if (!parse_input_line(c.buf.substr(start, nl - start), &evs, &error)) {
+            log(error);
+            continue;
+        }
+        for (const InputEvent& e : evs) inject(e);
+    }
+    c.buf.erase(0, start);
+    return c.buf.size() < 65536;
+}
+
+Client* Server::focus() const {
+    // The newest client with a toplevel: a restarted hwcomposer replaces the old one
+    for (auto it = clients_.rbegin(); it != clients_.rend(); ++it)
+        if ((*it)->toplevel_surface()) return it->get();
+    return nullptr;
+}
+
+bool Server::inject(const InputEvent& e) {
+    Client* c = focus();
+    if (!c) return false;
+    c->deliver(e);
+    return true;
+}
+
 bool Server::run() {
     for (;;) {
         std::vector<pollfd> pfds;
         pfds.push_back({wake_[0], POLLIN, 0});
         pfds.push_back({listen_fd_, POLLIN, 0});
+        pfds.push_back({input_fd_, POLLIN, 0});
+        for (auto& in : inputs_) pfds.push_back({in.fd, POLLIN, 0});
+        const size_t first_client = pfds.size();
         for (auto& c : clients_) pfds.push_back({c->fd(), (short)(POLLIN | (c->wants_write() ? POLLOUT : 0)), 0});
         if (poll(pfds.data(), pfds.size(), -1) < 0) {
             if (errno == EINTR) continue;
@@ -711,7 +839,16 @@ bool Server::run() {
         }
         if (pfds[0].revents) return true;
         if (pfds[1].revents & POLLIN) accept_client();
-        for (size_t i = 2, k = 0; i < pfds.size(); ++i) {
+        if (pfds[2].revents & POLLIN) accept_input();
+        for (size_t i = 3, k = 0; i < first_client; ++i) {
+            if ((pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) && !read_input(inputs_[k])) {
+                close(inputs_[k].fd);
+                inputs_.erase(inputs_.begin() + (ptrdiff_t)k);
+            } else {
+                ++k;
+            }
+        }
+        for (size_t i = first_client, k = 0; i < pfds.size(); ++i) {
             Client* c = clients_[k].get();
             bool keep = true;
             if (pfds[i].revents & POLLIN) keep = c->on_readable();

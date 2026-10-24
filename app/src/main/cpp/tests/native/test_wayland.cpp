@@ -2,7 +2,8 @@
 // Waydroid's hwcomposer does in single-window mode: bind the globals,
 // open a maximized xdg_toplevel, wait for its configure, calibrate with a
 // 1x1 buffer, then post full-size shm frames with frame callbacks.
-// Also checks the vinefb sink's pixel formats.
+// Then touches and keys through the input socket, as the app sends them.
+// Also checks the input line parser and the vinefb sink's pixel formats.
 #include "../../display/wayland/vinefb_sink.h"
 #include "../../display/wayland/wl_server.h"
 
@@ -15,6 +16,8 @@
 #include <fcntl.h>
 #include <string>
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/syscall.h>
 #include <thread>
 #include <unistd.h>
@@ -64,6 +67,9 @@ struct Client {
     bool configured = false;
     uint32_t seat_caps = 99;
     int releases = 0, frames_done = 0;
+    // input
+    int keymap_format = -1, keymap_fd_ok = 0, entered = 0;
+    std::vector<std::string> touch_log, key_log;
 };
 
 void global(void* data, wl_registry* reg, uint32_t name, const char* iface, uint32_t version) {
@@ -96,6 +102,60 @@ const wl_output_listener output_listener = {out_geometry, out_mode, out_done, ou
 void seat_caps(void* data, wl_seat*, uint32_t caps) { static_cast<Client*>(data)->seat_caps = caps; }
 void seat_name(void*, wl_seat*, const char*) {}
 const wl_seat_listener seat_listener = {seat_caps, seat_name};
+
+std::string fmt_xy(wl_fixed_t x, wl_fixed_t y) {
+    char b[48];
+    snprintf(b, sizeof b, "%.1f,%.1f", wl_fixed_to_double(x), wl_fixed_to_double(y));
+    return b;
+}
+void t_down(void* d, wl_touch*, uint32_t, uint32_t, wl_surface* s, int32_t id, wl_fixed_t x, wl_fixed_t y) {
+    static_cast<Client*>(d)->touch_log.push_back((s ? "down " : "down-nosurface ") + std::to_string(id) + " " + fmt_xy(x, y));
+}
+void t_up(void* d, wl_touch*, uint32_t, uint32_t, int32_t id) { static_cast<Client*>(d)->touch_log.push_back("up " + std::to_string(id)); }
+void t_motion(void* d, wl_touch*, uint32_t, int32_t id, wl_fixed_t x, wl_fixed_t y) {
+    static_cast<Client*>(d)->touch_log.push_back("motion " + std::to_string(id) + " " + fmt_xy(x, y));
+}
+void t_frame(void* d, wl_touch*) { static_cast<Client*>(d)->touch_log.push_back("frame"); }
+void t_cancel(void* d, wl_touch*) { static_cast<Client*>(d)->touch_log.push_back("cancel"); }
+void t_shape(void*, wl_touch*, int32_t, wl_fixed_t, wl_fixed_t) {}
+void t_orientation(void*, wl_touch*, int32_t, wl_fixed_t) {}
+const wl_touch_listener touch_listener = {t_down, t_up, t_motion, t_frame, t_cancel, t_shape, t_orientation};
+
+void k_keymap(void* d, wl_keyboard*, uint32_t format, int fd, uint32_t) {
+    auto* c = static_cast<Client*>(d);
+    c->keymap_format = (int)format;
+    c->keymap_fd_ok = fd >= 0;
+    if (fd >= 0) close(fd);
+}
+void k_enter(void* d, wl_keyboard*, uint32_t, wl_surface* s, wl_array*) { static_cast<Client*>(d)->entered += s != nullptr; }
+void k_leave(void*, wl_keyboard*, uint32_t, wl_surface*) {}
+void k_key(void* d, wl_keyboard*, uint32_t, uint32_t, uint32_t key, uint32_t state) {
+    static_cast<Client*>(d)->key_log.push_back(std::to_string(key) + (state ? "+" : "-"));
+}
+void k_mods(void*, wl_keyboard*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
+void k_repeat(void*, wl_keyboard*, int32_t, int32_t) {}
+const wl_keyboard_listener keyboard_listener = {k_keymap, k_enter, k_leave, k_key, k_mods, k_repeat};
+
+// Writes lines to the server's input socket
+bool send_input(const std::string& path, const std::string& lines) {
+    const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    sockaddr_un sa{};
+    sa.sun_family = AF_UNIX;
+    snprintf(sa.sun_path, sizeof sa.sun_path, "%s", path.c_str());
+    const bool ok = fd >= 0 && connect(fd, reinterpret_cast<sockaddr*>(&sa), sizeof sa) == 0 &&
+                    write(fd, lines.data(), lines.size()) == (ssize_t)lines.size();
+    if (fd >= 0) close(fd);
+    return ok;
+}
+
+// Round trips until `done` or about a second passes
+template <typename F>
+void pump(wl_display* d, F done) {
+    for (int i = 0; i < 100 && !done(); ++i) {
+        wl_display_roundtrip(d);
+        if (!done()) usleep(10000);
+    }
+}
 
 void wm_ping(void*, xdg_wm_base* b, uint32_t serial) { xdg_wm_base_pong(b, serial); }
 const xdg_wm_base_listener wm_listener = {wm_ping};
@@ -138,6 +198,7 @@ void test_session(const std::string& dir) {
     vine::wl::Server server(&sink, nullptr);
     std::string err;
     CHECK(server.listen(dir + "/wayland-0", &err), "listen: %s", err.c_str());
+    CHECK(server.listen_input(dir + "/input", &err), "listen_input: %s", err.c_str());
     std::thread th([&] { server.run(); });
 
     setenv("XDG_RUNTIME_DIR", dir.c_str(), 1);
@@ -161,7 +222,13 @@ void test_session(const std::string& dir) {
     wl_display_roundtrip(c.display);
     CHECK(c.has_abgr, "ABGR8888 advertised");
     CHECK(c.mode_w == (int)W && c.mode_h == (int)H, "output mode %dx%d", c.mode_w, c.mode_h);
-    CHECK(c.seat_caps == 0, "seat caps %u", c.seat_caps);
+    CHECK(c.seat_caps == (WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_TOUCH), "seat caps %u", c.seat_caps);
+    wl_touch* touch = wl_seat_get_touch(c.seat);
+    wl_touch_add_listener(touch, &touch_listener, &c);
+    wl_keyboard* kbd = wl_seat_get_keyboard(c.seat);
+    wl_keyboard_add_listener(kbd, &keyboard_listener, &c);
+    wl_display_roundtrip(c.display);
+    CHECK(c.keymap_format == WL_KEYBOARD_KEYMAP_FORMAT_NO_KEYMAP && c.keymap_fd_ok, "no_keymap with an fd");
 
     wl_surface* surf = wl_compositor_create_surface(c.compositor);
     xdg_surface* xs = xdg_wm_base_get_xdg_surface(c.wm_base, surf);
@@ -225,6 +292,34 @@ void test_session(const std::string& dir) {
     CHECK(c.frames_done == 2, "frame callbacks %d", c.frames_done);
     CHECK(server.frames() == 3, "server counted %llu", (unsigned long long)server.frames());
 
+    // Input: a two-finger gesture, a key, typed text, an unknown line in between
+    CHECK(send_input(dir + "/input",
+                     "touch 0 0 1 7 0.5 0.25\n"
+                     "touch 5 1 2 7 0.5 0.25 8 1.0 1.0\n"
+                     "touch 2 0 2 7 0.25 0.5 8 1.0 1.0\n"
+                     "bogus\n"
+                     "touch 6 0 2 7 0.25 0.5 8 1.0 1.0\n"
+                     "touch 1 0 1 8 1.0 1.0\n"
+                     "key 4 1\nkey 4 0\ntext aB\n"),
+          "input lines sent");
+    pump(c.display, [&] { return c.touch_log.size() >= 12 && c.key_log.size() >= 8; });
+    const std::vector<std::string> want_touch = {
+        "down 7 32.0,12.0", "frame", "down 8 64.0,48.0", "frame", "motion 7 16.0,24.0", "motion 8 64.0,48.0",
+        "frame", "up 7", "frame", "up 8", "frame"};
+    std::string got;
+    for (auto& t : c.touch_log) got += t + "; ";
+    CHECK(c.touch_log == want_touch, "touch events: %s", got.c_str());
+    const std::vector<std::string> want_keys = {"158+", "158-", "30+", "30-", "42+", "48+", "48-", "42-"};
+    got.clear();
+    for (auto& k : c.key_log) got += k + " ";
+    CHECK(c.key_log == want_keys, "key events: %s", got.c_str());
+    CHECK(c.entered == 1, "keyboard entered once (%d)", c.entered);
+    CHECK(send_input(dir + "/input", "touch 3 0 1 7 0 0\n"), "cancel sent");
+    pump(c.display, [&] { return c.touch_log.size() >= 12; });
+    CHECK(c.touch_log.size() == 12 && c.touch_log.back() == "cancel", "touch cancel");
+    wl_touch_release(touch);
+    wl_keyboard_release(kbd);
+
     // Growing the pool maps it again
     wl_shm_pool_resize(pool, (int32_t)(size * 2));
     wl_display_roundtrip(c.display);
@@ -247,6 +342,31 @@ void test_session(const std::string& dir) {
 
     server.stop();
     th.join();
+}
+
+void test_lines() {
+    printf("[input lines]\n");
+    using vine::wl::InputEvent;
+    std::vector<InputEvent> ev;
+    std::string err;
+    CHECK(vine::wl::parse_input_line("touch 0 0 1 3 0.1 0.9", &ev, &err) && ev.size() == 2 &&
+              ev[0].kind == InputEvent::TouchDown && ev[0].id == 3 && ev[0].x == 0.1 && ev[1].kind == InputEvent::TouchFrame,
+          "touch down");
+    ev.clear();
+    CHECK(!vine::wl::parse_input_line("touch 0 2 1 3 0.1 0.9", &ev, &err) && ev.empty(), "index out of range rejected");
+    CHECK(!vine::wl::parse_input_line("touch 0 0 2 3 0.1 0.9", &ev, &err) && ev.empty(), "short point list rejected");
+    CHECK(!vine::wl::parse_input_line("touch 9 0 1 3 0.1 0.9", &ev, &err) && ev.empty(), "unknown action rejected");
+    CHECK(vine::wl::parse_input_line("key 3 1", &ev, &err) && ev.size() == 1 && ev[0].key == 172 && ev[0].down, "HOME");
+    ev.clear();
+    CHECK(!vine::wl::parse_input_line("key 187 1", &ev, &err) && ev.empty(), "APP_SWITCH has no small evdev code");
+    CHECK(vine::wl::evdev_for_keycode(29) == 30 && vine::wl::evdev_for_keycode(54) == 44 &&
+              vine::wl::evdev_for_keycode(7) == 11 && vine::wl::evdev_for_keycode(16) == 10,
+          "letters and digits");
+    CHECK(vine::wl::parse_input_line("text a\\nb", &ev, &err) && ev.size() == 6 && ev[0].key == 30 && ev[2].key == 28 &&
+              ev[4].key == 48,
+          "text with an escaped newline");
+    ev.clear();
+    CHECK(!vine::wl::parse_input_line("text \xc3\xa9", &ev, &err) && ev.empty(), "non-ASCII text rejected");
 }
 
 void test_sink(const std::string& dir) {
@@ -290,6 +410,7 @@ int main() {
     char tmpl[] = "/tmp/vine_wl_test.XXXXXX";
     const std::string dir = mkdtemp(tmpl);
     test_session(dir);
+    test_lines();
     test_sink(dir);
     rmdir(dir.c_str());
     printf("\n%d checks, %d failed\n", g_checks, g_failed);

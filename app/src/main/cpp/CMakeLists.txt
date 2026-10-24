@@ -82,6 +82,7 @@ add_executable(vine_wl
     display/wayland/vine_wl_main.cpp
     display/wayland/wl_server.cpp
     display/wayland/vinefb_sink.cpp
+    display/wayland/input_lines.cpp
 )
 target_include_directories(vine_wl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../rom/hwc)
 target_link_options(vine_wl PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-size=16384)
