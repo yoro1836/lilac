@@ -185,10 +185,12 @@ does it. Keep a snapshot only while iterating often.
    refcounts, fd passing, death notification, scatter-gather.~~ Done.
 2. ~~On device: servicemanager + hwservicemanager + `service list` under
    tawcroot.~~ Done.
-   init boots through to system_server, which waits for a display:
-   [rootless-boot.md](rootless-boot.md).
-3. Compositor in the app, surfaceflinger + composer HAL → first frame.
-4. system_server, launcher, input; freeze the ROM patch list.
+3. ~~Compositor in the app, surfaceflinger + composer HAL → first
+   frame.~~ Done: `vine_wl` serves Waydroid's hwcomposer, the guest boots
+   to its lock screen ([rootless-boot.md](rootless-boot.md)).
+4. system_server, launcher, input; freeze the ROM patch list. Started:
+   system_server and apps run, SystemUI and watchdog stability and input
+   remain.
 5. Rootless engine behind the helper protocol, `.vrom` extraction, UI switch.
 6. Own 64-bit-only ROM build if milestone 4 needs patches.
 
