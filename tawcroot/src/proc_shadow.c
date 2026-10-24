@@ -359,6 +359,16 @@ static int is_proc_self_maps(const char *path)
  * them get the kernel's normal -EACCES, same as before. */
 int tawcroot_proc_shadow_classify(const char *path)
 {
+	/* selinuxfs: an app may neither read nor map these; Android's
+	 * userspace (installd, libselinux's status page) gives up without
+	 * them. The guest's policy is enforced by nothing, so: permissive. */
+	if (tawc_starts_with(path, "/sys/fs/selinux/")) {
+		if (tawc_streq(path + 16, "status"))
+			return TAWCROOT_PROC_SHADOW_SELINUX_STATUS;
+		if (tawc_streq(path + 16, "enforce"))
+			return TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE;
+		return TAWCROOT_PROC_SHADOW_NONE;
+	}
 	if (!tawc_starts_with(path, "/proc/"))
 		return TAWCROOT_PROC_SHADOW_NONE;
 	long tid;
@@ -690,6 +700,22 @@ static long open_proc_loadavg_shadow(void)
 	return memfd_from_bytes("tawcroot-loadavg", buf, pos);
 }
 
+/* selinuxfs status page (struct selinux_status_t): version 1, sequence
+ * 0 (no update in progress), permissive, policy load 0, deny_unknown 0.
+ * A whole page, because libselinux maps one. */
+static long open_selinux_status_shadow(void)
+{
+	long memfd = tawc_memfd_create("tawcroot-selinux-status", 1U /*MFD_CLOEXEC*/);
+	if (memfd < 0) return memfd;
+	const uint32_t status[5] = { 1, 0, 0, 0, 0 };
+	if (TAWC_RAW(TAWC_SYS_ftruncate, memfd, 4096, 0, 0, 0, 0) != 0 ||
+	    TAWC_RAW(TAWC_SYS_pwrite64, memfd, (long)status, sizeof status, 0, 0, 0) != (long)sizeof status) {
+		tawc_close((int)memfd);
+		return TAWC_EIO;
+	}
+	return memfd;
+}
+
 long tawcroot_proc_shadow_open(int kind)
 {
 	switch (kind) {
@@ -711,6 +737,10 @@ long tawcroot_proc_shadow_open(int kind)
 		return open_proc_uptime_shadow();
 	case TAWCROOT_PROC_SHADOW_LOADAVG:
 		return open_proc_loadavg_shadow();
+	case TAWCROOT_PROC_SHADOW_SELINUX_STATUS:
+		return open_selinux_status_shadow();
+	case TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE:
+		return memfd_from_bytes("tawcroot-selinux-enforce", "0", 1);
 	default:
 		return TAWC_EINVAL;
 	}

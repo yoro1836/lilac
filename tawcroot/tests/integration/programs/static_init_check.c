@@ -4,7 +4,9 @@
  * init does. With a host pid as argv[1], also checks that the guest
  * can neither see nor signal it, kill(-1) included. With `caps nspawn`
  * or `caps all`, checks the fake capability set instead; with `rlimit`,
- * that raising a hard limit past the host's clamps instead of failing.
+ * that raising a hard limit past the host's clamps instead of failing;
+ * with `ids`, that /proc/<pid>/status shows virtual Uid/Gid lines and
+ * SO_PEERCRED shows init as pid 1.
  *
  * Exit 42 on success; every other code names the failed step. pids go
  * through raw syscalls so libc caching can't hide the translation. */
@@ -15,7 +17,10 @@
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/syscall.h>
@@ -123,8 +128,58 @@ static int rlimit(void)
 	return 0;
 }
 
+/* First number of `key` in /proc/<pid>/status (pid 0: self), or -1. */
+static long status_id(long pid, const char *key)
+{
+	char path[64], buf[4096];
+	if (pid) snprintf(path, sizeof path, "/proc/%ld/status", pid);
+	else snprintf(path, sizeof path, "/proc/self/status");
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) return -1;
+	long n = read(fd, buf, sizeof buf - 1);
+	close(fd);
+	if (n <= 0) return -1;
+	buf[n] = 0;
+	char *line = strstr(buf, key);
+	return line ? strtol(line + strlen(key), NULL, 10) : -1;
+}
+
+static int ids(void)
+{
+	if (status_id(0, "\nUid:") != 0 || status_id(0, "\nGid:") != 0) return 1;
+	int go[2], done[2], sv[2];
+	if (pipe(go) || pipe(done) || socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 2;
+	pid_t c = fork();
+	if (c < 0) return 3;
+	if (c == 0) {
+		char b = 0;
+		struct ucred cr;
+		socklen_t len = sizeof cr;
+		if (getsockopt(sv[1], SOL_SOCKET, SO_PEERCRED, &cr, &len) || cr.pid != 1) _exit(4);
+		if (setresgid(1001, 1001, 1001) || setresuid(1000, 1000, 1000)) _exit(1);
+		if (status_id(0, "\nUid:") != 1000) _exit(2);
+		if (write(go[1], &b, 1) != 1 || read(done[0], &b, 1) != 1) _exit(3);
+		_exit(0);
+	}
+	close(go[1]);
+	close(done[0]);
+	char b = 0;
+	int e = 0;
+	if (read(go[0], &b, 1) != 1) e = 4;
+	else if (status_id(c, "\nUid:") != 1000) e = 5;
+	else if (status_id(c, "\nGid:") != 1001) e = 6;
+	if (write(done[1], &b, 1) != 1 && !e) e = 7;
+	int status = 0;
+	if (waitpid(c, &status, 0) != c || !WIFEXITED(status)) return 8;
+	return e ? e : WEXITSTATUS(status) ? 10 + WEXITSTATUS(status) : 0;
+}
+
 int main(int argc, char **argv)
 {
+	if (argc > 1 && !strcmp(argv[1], "ids")) {
+		int e = ids();
+		return e ? 80 + e : 42;
+	}
 	if (argc > 1 && !strcmp(argv[1], "rlimit")) {
 		int e = rlimit();
 		return e ? 70 + e : 42;

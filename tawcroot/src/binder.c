@@ -49,6 +49,8 @@
 #define PROT_WRITE_       2
 #define MAP_SHARED_       1
 #define MAP_TYPE_         0x0f
+#define MAP_PRIVATE_      2
+#define MAP_ANONYMOUS_    0x20
 #define F_DUPFD_          0
 #define F_DUPFD_CLOEXEC_  1030
 #define SIGSYS_           31
@@ -109,6 +111,13 @@ static struct binder_slot g_binders[MAX_BINDERS];
 static struct thread_slot g_threads[MAX_THREADS];
 static volatile int g_lock;
 
+/* Pid whose tables this memory is. A MADV_WIPEONFORK page: a fork
+ * child reads 0 and takes over its private copy, while a CLONE_VM child
+ * (vfork, posix_spawn) still reads its parent's pid and must leave the
+ * tables alone. ART's Runtime.exec child closes every fd before exec. */
+#define MADV_WIPEONFORK_ 18
+static volatile long *g_owner;
+
 static void lock(void)
 {
 	while (__atomic_test_and_set(&g_lock, __ATOMIC_ACQUIRE)) {}
@@ -120,6 +129,28 @@ static void unlock(void)
 }
 
 /* ---- helpers ------------------------------------------------------------ */
+
+static int own_tables(void)
+{
+	if (!g_owner) return 1;
+	long pid = tawc_getpid();
+	if (!*g_owner) *g_owner = pid;
+	return *g_owner == pid;
+}
+
+static void owner_setup(void)
+{
+	if (!g_owner) {
+		long m = tawc_mmap(0, 4096, PROT_READ_ | PROT_WRITE_, MAP_PRIVATE_ | MAP_ANONYMOUS_, -1, 0);
+		if (m < 0 && m > -4096) return;
+		if (TAWC_RAW(TAWC_SYS_madvise, m, 4096, MADV_WIPEONFORK_, 0, 0, 0) < 0) {
+			tawc_munmap((void *)m, 4096);
+			return;
+		}
+		g_owner = (volatile long *)m;
+	}
+	*g_owner = tawc_getpid();
+}
 
 /* Move fd to a reserved high slot; closes the original. */
 static long reserve(long fd)
@@ -310,6 +341,7 @@ long tawcroot_binder_open(int dirfd, const char *path, int flags)
 	}
 
 	lock();
+	if (!g_owner || !*g_owner) owner_setup();
 	struct binder_slot *s = 0;
 	for (int i = 0; i < MAX_BINDERS && !s; i++)
 		if (!g_binders[i].fd) s = &g_binders[i];
@@ -413,7 +445,7 @@ static void drop_thread(struct binder_slot *s)
 void tawcroot_binder_close(int fd)
 {
 	struct binder_slot *s = find_binder(fd);
-	if (!s) return;
+	if (!s || !own_tables()) return;
 	int index = (int)(s - g_binders) + 1;
 	lock();
 	for (int i = 0; i < MAX_THREADS; i++)

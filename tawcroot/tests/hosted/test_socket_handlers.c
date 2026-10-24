@@ -34,6 +34,7 @@
 #include "errno_neg.h"
 #include "fdtab.h"
 #include "path.h"
+#include "namespace.h"
 #include "sysnr.h"
 
 /* Build "<dir>/<name repeated to `len` chars>" guest paths. */
@@ -377,6 +378,87 @@ test(hosted_uevent_monitor_sequence_completes)
 	test_int_eq((int)recv((int)fd, buf, sizeof buf, MSG_DONTWAIT), -1);
 	test_int_eq(errno, EAGAIN);
 
+	test_int_eq(close((int)fd), 0);
+	th_teardown(&v);
+}
+
+/* An init session's netlink bind that the host refuses (an app may not
+ * join route/uevent/NFLOG groups) succeeds without effect; outside one
+ * the refusal stands. */
+static bool deny_bind(long nr, const long args[6], long *ret)
+{
+	(void)args;
+	if (nr != TAWC_SYS_bind) return false;
+	*ret = -EACCES;
+	return true;
+}
+
+test(hosted_netlink_bind_denied_is_accepted_in_init_session)
+{
+	th_view v;
+	th_setup(&v, "netlink-bind");
+	long fd = th_sys(TAWC_SYS_socket, AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC,
+			 NETLINK_ROUTE, 0, 0, 0);
+	test_true(fd >= 0);
+	struct sockaddr_nl snl;
+	memset(&snl, 0, sizeof snl);
+	snl.nl_family = AF_NETLINK;
+	snl.nl_groups = 1;  /* RTMGRP_LINK */
+	tawcroot_test_raw_hook = deny_bind;
+	test_int_eq(th_sys(TAWC_SYS_bind, fd, &snl, sizeof snl, 0, 0, 0), -EACCES);
+	uint32_t saved = tawcroot_namespace.session;
+	tawcroot_namespace.session |= TAWC_NS_INIT_SESSION;
+	test_int_eq(th_sys(TAWC_SYS_bind, fd, &snl, sizeof snl, 0, 0, 0), 0);
+	tawcroot_namespace.session = saved;
+	tawcroot_test_raw_hook = NULL;
+	test_int_eq(close((int)fd), 0);
+	th_teardown(&v);
+}
+
+/* An init session's NETLINK_NETFILTER socket the host refuses becomes
+ * a stand-in that accepts netd's config writes and binds. */
+static bool deny_netlink_socket(long nr, const long args[6], long *ret)
+{
+	if (nr != TAWC_SYS_socket || args[0] != AF_NETLINK) return false;
+	*ret = -EACCES;
+	return true;
+}
+
+test(hosted_netfilter_socket_stub_in_init_session)
+{
+	th_view v;
+	th_setup(&v, "nfnl-stub");
+	tawcroot_test_raw_hook = deny_netlink_socket;
+	test_int_eq(th_sys(TAWC_SYS_socket, AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
+			   12 /* NETLINK_NETFILTER */, 0, 0, 0), -EACCES);
+	uint32_t saved = tawcroot_namespace.session;
+	tawcroot_namespace.session |= TAWC_NS_INIT_SESSION;
+	long fd = th_sys(TAWC_SYS_socket, AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
+			 12, 0, 0, 0);
+	tawcroot_namespace.session = saved;
+	tawcroot_test_raw_hook = NULL;
+	test_true(fd >= 0);
+	struct sockaddr_nl snl;
+	memset(&snl, 0, sizeof snl);
+	snl.nl_family = AF_NETLINK;
+	test_int_eq(th_sys(TAWC_SYS_bind, fd, &snl, sizeof snl, 0, 0, 0), 0);
+	const char msg[16] = "nfulnl-config";
+	test_int_eq((int)write((int)fd, msg, sizeof msg), (int)sizeof msg);
+	char back[16];
+	test_int_eq((int)recv((int)fd, back, sizeof back, MSG_DONTWAIT), (int)sizeof back);
+	/* netd addresses the kernel explicitly */
+	struct sockaddr_nl kernel;
+	memset(&kernel, 0, sizeof kernel);
+	kernel.nl_family = AF_NETLINK;
+	test_int_eq(th_sys(TAWC_SYS_sendto, fd, msg, sizeof msg, 0, &kernel, sizeof kernel), (long)sizeof msg);
+	struct iovec iov = { (void *)msg, sizeof msg };
+	struct msghdr mh;
+	memset(&mh, 0, sizeof mh);
+	mh.msg_name = &kernel;
+	mh.msg_namelen = sizeof kernel;
+	mh.msg_iov = &iov;
+	mh.msg_iovlen = 1;
+	test_int_eq(th_sys(TAWC_SYS_sendmsg, fd, &mh, 0, 0, 0, 0), (long)sizeof msg);
 	test_int_eq(close((int)fd), 0);
 	th_teardown(&v);
 }

@@ -1535,6 +1535,7 @@ static void close_fds(int *fds, int n)
 static void thread_release(struct thread *th)
 {
 	struct proc *p = th->proc;
+	DBG("%s process %d: thread %d gone", p->ctx->name, p->guest_pid, th->tid);
 	/* Incoming transactions we owe a reply to fail; outgoing ones lose
 	 * their sender. */
 	struct txn *t = th->stack;
@@ -1730,6 +1731,7 @@ static void on_proc(struct proc *p)
 	fcntl(fds[0], F_SETFL, O_NONBLOCK);
 	list_add_tail(&p->threads, &th->entry);
 	epoll_add(&th->conn);
+	DBG("%s process %d: thread %d", p->ctx->name, p->guest_pid, th->tid);
 }
 
 static void on_request(struct thread *th, const int *fds, int nfds)
@@ -1872,8 +1874,36 @@ static void write_features(const char *dir)
 	}
 }
 
-static volatile sig_atomic_t g_stop;
+static size_t list_len(const struct list *l)
+{
+	size_t n = 0;
+	for (const struct list *e = l->next; e != l; e = e->next) n++;
+	return n;
+}
+
+/* SIGUSR1: every live process, its threads and their transaction
+ * stacks, for diagnosing a hung guest. */
+static void dump_state(void)
+{
+	for (struct list *e = g_procs.next; e != &g_procs; e = e->next) {
+		struct proc *p = container_of(e, struct proc, entry);
+		LOG("%s pid %d (host %d)%s todo %zu threads %zu", p->ctx->name, p->guest_pid,
+		    p->host_pid, p->dead ? " dead" : "", list_len(&p->todo), list_len(&p->threads));
+		for (struct list *t = p->threads.next; t != &p->threads; t = t->next) {
+			struct thread *th = container_of(t, struct thread, entry);
+			LOG("  tid %d looper %#x%s todo %zu", th->tid, th->looper,
+			    th->waiting ? " waiting" : "", list_len(&th->todo));
+			for (struct txn *x = th->stack; x; x = x->to_thread == th ? x->to_parent : x->from_parent)
+				LOG("    txn code %u flags %#x from %d to %d (pid %d)%s", x->code, x->flags,
+				    x->from ? x->from->tid : 0, x->to_thread ? x->to_thread->tid : 0,
+				    x->to_proc ? x->to_proc->guest_pid : 0, x->is_reply ? " reply" : "");
+		}
+	}
+}
+
+static volatile sig_atomic_t g_stop, g_dump;
 static void on_signal(int sig) { (void)sig; g_stop = 1; }
+static void on_dump(int sig) { (void)sig; g_dump = 1; }
 
 int main(int argc, char **argv)
 {
@@ -1896,6 +1926,8 @@ int main(int argc, char **argv)
 	struct sigaction sa = { .sa_handler = on_signal };
 	sigaction(SIGTERM, &sa, NULL);
 	sigaction(SIGINT, &sa, NULL);
+	struct sigaction da = { .sa_handler = on_dump };
+	sigaction(SIGUSR1, &da, NULL);
 
 	list_init(&g_procs);
 	list_init(&g_dead_nodes);
@@ -1924,6 +1956,7 @@ int main(int argc, char **argv)
 		 * event in the same batch would name. */
 		struct epoll_event ev[1];
 		int n = epoll_wait(g_epoll, ev, 1, -1);
+		if (g_dump) { g_dump = 0; dump_state(); }
 		if (n < 0) {
 			if (errno == EINTR) continue;
 			LOG("epoll_wait: %s", strerror(errno));

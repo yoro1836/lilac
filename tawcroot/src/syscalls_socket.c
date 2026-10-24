@@ -80,6 +80,8 @@
 #define AF_NETLINK_FAMILY  16
 #define NETLINK_AUDIT_PROTO 9
 #define NETLINK_KOBJECT_UEVENT_PROTO 15
+#define NETLINK_NFLOG_PROTO 5
+#define NETLINK_NETFILTER_PROTO 12
 #define SOL_SOCKET_LEVEL 1
 #define SO_PEERCRED_OPT 17
 #define SOCK_TYPE_MASK  0xf
@@ -171,6 +173,17 @@ static int fd_is_uevent_stub(int fd)
 	return is_uevent_stub_name(&un, (long)len);
 }
 
+/* A netlink destination (the kernel) on one of our stubs: send to the
+ * stub's connected self instead, where an AF_UNIX socket would refuse
+ * the foreign address. */
+static int to_netlink_stub(int fd, const void *dest, long addrlen)
+{
+	uint16_t fam;
+	return addrlen >= (long)sizeof fam &&
+	       tawc_copy_from_guest(&fam, sizeof fam, dest) == 0 &&
+	       fam == AF_NETLINK_FAMILY && fd_is_uevent_stub(fd);
+}
+
 /* Build "\0tawcroot-uevent.<pid>.<seq>" into `un`; returns the addrlen
  * (abstract names are not NUL-terminated — the length delimits them). */
 static long uevent_stub_addr(struct tawc_sockaddr_un *un, unsigned long pid,
@@ -199,7 +212,7 @@ static long uevent_stub_addr(struct tawc_sockaddr_un *un, unsigned long pid,
  * SOCK_NONBLOCK are preserved — libudev asks for both and relies on
  * the non-blocking read. Returns the fd, or a negative errno for the
  * caller to fall back on. */
-static long open_uevent_stub(long type)
+static long open_uevent_stub(long type, int loop_back)
 {
 	long fd = TAWC_RAW(TAWC_SYS_socket, AF_UNIX_FAMILY,
 			   (type & ~(long)SOCK_TYPE_MASK) | SOCK_DGRAM_TYPE,
@@ -218,6 +231,11 @@ static long open_uevent_stub(long type)
 						uevent_seq++);
 		long e = TAWC_RAW(TAWC_SYS_bind, fd, (long)&un, addrlen,
 				  0, 0, 0);
+		/* A listener that also writes (netd's NFLOG config) needs
+		 * write() to succeed: connected to itself, its messages come
+		 * back as ones it has no handler for. */
+		if (e == 0 && loop_back)
+			e = TAWC_RAW(TAWC_SYS_connect, fd, (long)&un, addrlen, 0, 0, 0);
 		if (e == 0) return fd;
 		if (e != TAWC_EADDRINUSE) break;
 	}
@@ -599,8 +617,18 @@ static long handle_bind(const tawcroot_syscall_args *args, ucontext_t *uc)
 	if (addr && (long)args->c >= (long)sizeof(uint16_t)) {
 		uint16_t fam;
 		if (tawc_copy_from_guest(&fam, sizeof fam, addr) == 0 &&
-		    fam == AF_NETLINK_FAMILY && fd_is_uevent_stub((int)args->a))
-			return 0;
+		    fam == AF_NETLINK_FAMILY) {
+			if (fd_is_uevent_stub((int)args->a)) return 0;
+			long r = TAWC_RAW(TAWC_SYS_bind, args->a, args->b, args->c, 0, 0, 0);
+			/* An app may not join most netlink groups (uevents, route
+			 * changes, NFLOG), which an init session's daemons treat
+			 * as fatal (Android's netd). Their listening sockets then
+			 * just hear nothing. */
+			if ((r == TAWC_EACCES || r == TAWC_EPERM) &&
+			    (tawcroot_namespace.session & TAWC_NS_INIT_SESSION))
+				return 0;
+			return r;
+		}
 	}
 	long pr = tawcroot_ports_call(args);
 	if (pr != TAWC_ENOSYS) return pr;
@@ -638,9 +666,9 @@ static long handle_sendto(const tawcroot_syscall_args *args, ucontext_t *uc)
 	long addrlen = (long)args->f;
 	long pr = tawcroot_ports_call(args);
 	if (pr != TAWC_ENOSYS) return pr;
-	if (!dest || addrlen <= 0) {
+	if (!dest || addrlen <= 0 || to_netlink_stub((int)args->a, dest, addrlen)) {
 		return TAWC_RAW(TAWC_SYS_sendto, args->a, args->b, args->c,
-				args->d, args->e, args->f);
+				args->d, 0, 0);
 	}
 	struct tawc_sockaddr_un un_out;
 	long new_addrlen;
@@ -693,6 +721,12 @@ static long handle_sendmsg(const tawcroot_syscall_args *args, ucontext_t *uc)
 	if (mh.msg_name == 0 || mh.msg_namelen == 0) {
 		return TAWC_RAW(TAWC_SYS_sendmsg, args->a, args->b, args->c,
 				0, 0, 0);
+	}
+	if (to_netlink_stub((int)args->a, (const void *)(uintptr_t)mh.msg_name,
+			    (long)mh.msg_namelen)) {
+		mh.msg_name = 0;
+		mh.msg_namelen = 0;
+		return TAWC_RAW(TAWC_SYS_sendmsg, args->a, (long)&mh, args->c, 0, 0, 0);
 	}
 	struct tawc_sockaddr_un un_out;
 	long new_addrlen;
@@ -897,6 +931,10 @@ static long handle_getsockopt(const tawcroot_syscall_args *args, ucontext_t *uc)
 			   (long)&cred, (long)&klen, 0);
 	if (rv < 0) return rv;
 
+	/* The fake init is pid 1 to its peers too: init's property service
+	 * tells its own sets (a finished restorecon) from requests by it. */
+	if (klen >= 4 && tawcroot_namespace.init_pid && cred.pid == tawcroot_namespace.init_pid)
+		cred.pid = 1;
 	uint32_t real_uid = (uint32_t)tawc_getuid();
 	uint32_t uid, gid;
 	if (klen >= sizeof cred && cred.uid == real_uid &&
@@ -935,12 +973,16 @@ static long handle_socket(const tawcroot_syscall_args *args, ucontext_t *uc)
 		return TAWC_EPROTONOSUPPORT;
 	long rv = TAWC_RAW(TAWC_SYS_socket, args->a, args->b, args->c,
 			   0, 0, 0);
-	/* Substitute a silent stub only for the uevent monitor, and only
-	 * once the kernel has actually refused us — see TAWC_UEVENT_TAG. */
-	if (rv == TAWC_EACCES || rv == TAWC_EPERM) {
-		if ((int)args->a == AF_NETLINK_FAMILY &&
-		    (int)args->c == NETLINK_KOBJECT_UEVENT_PROTO) {
-			long stub = open_uevent_stub(args->b);
+	/* Substitute a silent stub only for listening sockets, and only
+	 * once the kernel has actually refused us — see TAWC_UEVENT_TAG:
+	 * the uevent monitor, and in init sessions the netfilter log
+	 * listeners netd will not start without. */
+	if ((rv == TAWC_EACCES || rv == TAWC_EPERM) && (int)args->a == AF_NETLINK_FAMILY) {
+		int proto = (int)args->c;
+		int nflog = (proto == NETLINK_NFLOG_PROTO || proto == NETLINK_NETFILTER_PROTO) &&
+			(tawcroot_namespace.session & TAWC_NS_INIT_SESSION);
+		if (proto == NETLINK_KOBJECT_UEVENT_PROTO || nflog) {
+			long stub = open_uevent_stub(args->b, nflog);
 			if (stub >= 0) return stub;
 		}
 	}

@@ -23,6 +23,10 @@
  * read. Dropping that ref wakes the parent mid-release; it must get
  * BR_RELEASE and BR_DECREFS, and binderd must not touch the node after.
  *
+ * `static_binder_check vfork`: a vfork child closes the binder fd (as
+ * ART's Runtime.exec child closes every fd); the parent's binder must
+ * keep working.
+ *
  * Exit 42 on success, otherwise the failing step (1..49).
  */
 
@@ -346,10 +350,31 @@ static int dropref_parent(void)
 	return 42;
 }
 
+static int vfork_close(void)
+{
+	struct conn c;
+	open_binder(&c, 61);
+	struct binder_version v;
+	if (ioctl(c.fd, BINDER_VERSION, &v) < 0) FAIL(62);
+	if (ioctl(c.fd, BINDER_SET_MAX_THREADS, &(uint32_t){4}) < 0) FAIL(63);
+	pid_t pid = vfork();
+	if (pid < 0) FAIL(64);
+	if (pid == 0) {
+		close(c.fd);
+		_exit(0);
+	}
+	int status = 0;
+	if (waitpid(pid, &status, 0) != pid) FAIL(65);
+	if (ioctl(c.fd, BINDER_VERSION, &v) < 0) FAIL(66);
+	if (ioctl(c.fd, BINDER_SET_MAX_THREADS, &(uint32_t){4}) < 0) FAIL(67);
+	return 42;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc == 3 && !strcmp(argv[1], "dead")) return dead_parent(argv[2]);
 	if (argc == 2 && !strcmp(argv[1], "dropref")) return dropref_parent();
+	if (argc == 2 && !strcmp(argv[1], "vfork")) return vfork_close();
 	struct conn c;
 	open_binder(&c, 1);
 	struct flat_binder_object mgr = {

@@ -701,6 +701,18 @@ test(prod_init_rlimit)
 	rh_rmrf(FAKE_ROOTFS);
 }
 
+/* /proc/<pid>/status shows the virtual ids, the caller's and a peer's. */
+test(prod_init_status_ids)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--init", "--", "/bin/static_init_check", "ids", NULL
+	};
+	test_int_eq(run_with(args), 42);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
 /* A process outside the session (the test runner's other child) is
  * invisible and unsignalable from the guest, kill(-1) included. */
 test(prod_init_pid_isolation)

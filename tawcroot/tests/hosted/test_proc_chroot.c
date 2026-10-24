@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -127,6 +128,8 @@ static const struct { const char *path; int kind; } shadow_paths[] = {
 	{ "/proc/loadavg",                   TAWCROOT_PROC_SHADOW_LOADAVG },
 	{ "/proc/net/tcp",                   TAWCROOT_PROC_SHADOW_TCP },
 	{ "/proc/self/net/tcp6",             TAWCROOT_PROC_SHADOW_TCP6 },
+	{ "/sys/fs/selinux/status",          TAWCROOT_PROC_SHADOW_SELINUX_STATUS },
+	{ "/sys/fs/selinux/enforce",         TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE },
 };
 #define N_SHADOW_PATHS ((int)(sizeof shadow_paths / sizeof shadow_paths[0]))
 
@@ -1061,5 +1064,30 @@ test(hosted_chroot_failure_leaves_view_untouched)
 	test_true(fd >= 0);
 	test_int_eq(close((int)fd), 0);
 
+	th_teardown(&v);
+}
+
+/* selinuxfs shadows: a mappable permissive status page, enforce "0". */
+test(hosted_selinuxfs_shadows_permissive)
+{
+	th_view v;
+	th_setup(&v, "selinuxfs");
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/sys/fs/selinux/status", O_RDONLY | O_CLOEXEC, 0, 0, 0);
+	test_true(fd >= 0);
+	const uint32_t *st = mmap(NULL, 4096, PROT_READ, MAP_SHARED, (int)fd, 0);
+	test_true(st != MAP_FAILED);
+	if (st != MAP_FAILED) {
+		test_int_eq(st[0], 1);   /* version */
+		test_int_eq(st[1] & 1, 0); /* sequence: no update in progress */
+		test_int_eq(st[2], 0);   /* enforcing */
+		munmap((void *)st, 4096);
+	}
+	close((int)fd);
+	fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/sys/fs/selinux/enforce", O_RDONLY | O_CLOEXEC, 0, 0, 0);
+	test_true(fd >= 0);
+	char c = 0;
+	test_int_eq(read((int)fd, &c, 1), 1);
+	test_int_eq(c, '0');
+	close((int)fd);
 	th_teardown(&v);
 }

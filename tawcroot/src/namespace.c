@@ -15,6 +15,7 @@
 #include "dispatch.h"
 #include "errno_neg.h"
 #include "fdtab.h"
+#include "identity.h"
 #include "filter.h"
 #include "io.h"
 #include "linkstore.h"
@@ -182,6 +183,7 @@ static size_t rewrite_stat(const char *in, char *out, size_t cap, long pid)
 
 /* /proc/<pid>/status: the Tgid/Pid/PPid/NS* pid lines. */
 static int put_cap(char *out, size_t cap, size_t *n, const char *line, long pid);
+static int put_ids(char *out, size_t cap, size_t *n, const char *line, long pid);
 
 static size_t rewrite_status(const char *in, char *out, size_t cap, long pid)
 {
@@ -194,7 +196,7 @@ static size_t rewrite_status(const char *in, char *out, size_t cap, long pid)
         size_t k = 0;
         for (; k < sizeof keys / sizeof keys[0]; ++k) if (tawc_starts_with(line, keys[k])) break;
         if (k == sizeof keys / sizeof keys[0]) {
-            if (!put_cap(out, cap, &n, line, pid))
+            if (!put_cap(out, cap, &n, line, pid) && !put_ids(out, cap, &n, line, pid))
                 for (const char *d = line; d < end && n + 1 < cap; ++d) out[n++] = *d;
         } else {
             const char *d = line;
@@ -260,6 +262,35 @@ static int put_cap(char *out, size_t cap, size_t *n, const char *line, long pid)
         out[(*n)++] = "0123456789abcdef"[(v >> sh) & 0xf];
     }
     out[*n] = 0;
+    return 1;
+}
+
+/* Uid/Gid lines of an init session's /proc/<pid>/status: the virtual
+ * ids, the caller's own or a peer's recorded ones. ActivityManager
+ * checks a provider host's Uid line before trusting it. */
+static int put_ids(char *out, size_t cap, size_t *n, const char *line, long pid)
+{
+    int gid = tawc_starts_with(line, "Gid:");
+    if (!(tawcroot_namespace.session & TAWC_NS_INIT_SESSION) ||
+        (!gid && !tawc_starts_with(line, "Uid:"))) return 0;
+    uint32_t v[4];
+    if (pid == tawc_getpid()) {
+        tawc_identity id;
+        tawcroot_identity_get(&id);
+        v[0] = gid ? id.rgid : id.ruid;
+        v[1] = gid ? id.egid : id.euid;
+        v[2] = gid ? id.sgid : id.suid;
+        v[3] = gid ? id.fsgid : id.fsuid;
+    } else {
+        uint32_t u, g;
+        (void)tawcroot_namespace_peer_ids(pid, &u, &g);
+        for (int i = 0; i < 4; ++i) v[i] = gid ? g : u;
+    }
+    (void)tawc_str_append(out, cap, n, gid ? "Gid:" : "Uid:");
+    for (int i = 0; i < 4; ++i) {
+        (void)tawc_str_append(out, cap, n, "\t");
+        (void)tawc_str_append_dec(out, cap, n, v[i]);
+    }
     return 1;
 }
 
