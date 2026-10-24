@@ -77,6 +77,26 @@ if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
     set_target_properties(vine_helper PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
 endif()
 
+# Rootless guest display: Waydroid's hwcomposer connects to it, frames go to vinefb
+add_executable(vine_wl
+    display/wayland/vine_wl_main.cpp
+    display/wayland/wl_server.cpp
+    display/wayland/vinefb_sink.cpp
+)
+target_include_directories(vine_wl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../rom/hwc)
+target_link_options(vine_wl PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-size=16384)
+
+# Copied into the guest as its lmkd: answers system_server on the lmkd socket
+add_executable(vine_lmkd rootless/lmkd_stub.c)
+target_link_options(vine_lmkd PRIVATE -static -Wl,-z,max-page-size=16384)
+
+foreach(tool vine_wl vine_lmkd)
+    set_target_properties(${tool} PROPERTIES PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "${tool}")
+    if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+        set_target_properties(${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+    endif()
+endforeach()
+
 if(CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
     target_compile_definitions(vine_core PUBLIC VINE_HOST_ARM64=1)
 elseif(CMAKE_ANDROID_ARCH_ABI STREQUAL "armeabi-v7a")
