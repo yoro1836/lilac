@@ -101,6 +101,10 @@ rm -rf "$R/dev/input"
 mkdir -p "$W/run" "$R/run/user/1000" "$R/dev/input"
 bin/vine_wl --socket "$W/run/wayland-0" --vinefb "$W/vinefb" --create "${SIZE:-720x1440}" --input "$W/input" 2> "$W/vine_wl.log" &
 WL=$!
+# Audio: the audio HAL's libpulse connects to /run/user/1000/pulse/native.
+mkdir -p "$W/run/pulse"
+bin/vine_pulse --socket "$W/run/pulse/native" ${PULSE_FLAGS:-} 2> "$W/vine_pulse.log" &
+PA=$!
 ( ${WRAP:+$B/$WRAP} ${BINDERD_WRAP:+$B/$BINDERD_WRAP} ${BINDERD:-bin/binderd} ${BINDERD_FLAGS:-} "$W/binderfs"; echo "--- binderd exited: $?" >&2 ) 2> "$W/binderd.log" &
 BD=$!
 i=0; while [ ! -e "$W/binderfs/ready" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
@@ -118,5 +122,6 @@ echo "--- init.log"; tail -40 "$W/init.log"
 echo "--- kmsg"; tr "\0" "\n" < "$R/dev/kmsg" | grep -v "Reboot ending\|reboot call returned\|InitFatalReboot" | head -${KMSG_LINES:-40}
 echo "--- binderd.log"; tail -5 "$W/binderd.log"
 echo "--- vine_wl.log"; tail -5 "$W/vine_wl.log"
-kill -9 $IP $LP 2>/dev/null; pkill -f -- "$W/binderfs" 2>/dev/null; kill $WL 2>/dev/null
+echo "--- vine_pulse.log"; tail -5 "$W/vine_pulse.log"
+kill -9 $IP $LP 2>/dev/null; pkill -f -- "$W/binderfs" 2>/dev/null; kill $WL $PA 2>/dev/null
 guests_kill

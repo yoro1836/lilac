@@ -7,8 +7,9 @@ Staging lives in `/data/local/tmp/vine-dev/` (shell user):
 - `bin/`: `tawcroot` and `binderd` (`tawcroot/build.sh --abi=aarch64`, from
   `app/src/main/jniLibs/arm64-v8a/`), `ext4extract` (NDK static build of
   `app/src/main/cpp/rootless/ext4_extract.c` with `-DVINE_EXT4_EXTRACT_MAIN`),
-  `faultcatch` (NDK static build of `faultcatch.c`), `vine_wl` and
-  `vine_lmkd` (the app's CMake targets `libvine_wl.so`, `libvine_lmkd.so`),
+  `faultcatch` (NDK static build of `faultcatch.c`), `vine_wl`,
+  `vine_pulse` and `vine_lmkd` (the app's CMake targets `libvine_wl.so`,
+  `libvine_pulse.so`, `libvine_lmkd.so`),
   `vine_hal_service` (see below).
 
 `vine_hal_service` links the image's own `libhidlbase.so` and `libc++.so`,

@@ -36,6 +36,22 @@ posts each frame as a `wl_shm` buffer to `vine_wl`, which writes it into
   `waydroid.stub_sensors_hal=1` (else the sensors HAL never registers and
   system_server waits for it).
 
+## Audio path
+
+- `vine_pulse --socket w/run/pulse/native` (`app/src/main/cpp/audio/pulse/`):
+  a small PulseAudio server (native protocol 32, no shared memory) for
+  Waydroid's audio HAL, whose ALSA `pulse` plugin (libpulse 12) connects
+  to `/run/user/1000/pulse/native`. Each playback stream plays through
+  its own AAudio stream, each record stream captures through AAudio
+  (silence when AAudio can't open it). Tested on the host with libpulse
+  and the ALSA plugin; on device the server starts, but no stream has
+  reached it yet (see the gaps).
+- The image's `mediaserver` (`media.player`, `libmediaplayerservice`) is
+  32-bit only, so on 64-bit-only hosts every `MediaPlayer` user waits
+  for a service that never comes (ringtone previews hang Settings), and
+  codec lists fall back to slow local lookups. Fixing that takes a
+  64-bit-only image or 32-bit emulation.
+
 ## Rootfs preparation (host contract)
 
 What the engine must do to an extracted image, done today by
