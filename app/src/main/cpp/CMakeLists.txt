@@ -91,7 +91,17 @@ target_link_options(vine_wl PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-size=
 add_executable(vine_lmkd rootless/lmkd_stub.c)
 target_link_options(vine_lmkd PRIVATE -static -Wl,-z,max-page-size=16384)
 
-foreach(tool vine_wl vine_lmkd)
+# Rootless guest audio: Waydroid's audio HAL connects to it, AAudio plays and records
+add_executable(vine_pulse
+    audio/pulse/vine_pulse_main.cpp
+    audio/pulse/pa_server.cpp
+    audio/pulse/pa_wire.cpp
+    audio/pulse/aaudio_backend.cpp
+)
+target_link_libraries(vine_pulse PRIVATE aaudio)
+target_link_options(vine_pulse PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-size=16384)
+
+foreach(tool vine_wl vine_lmkd vine_pulse)
     set_target_properties(${tool} PROPERTIES PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "${tool}")
     if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
         set_target_properties(${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
