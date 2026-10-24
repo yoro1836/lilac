@@ -18,9 +18,17 @@ navigation bars. Not stable yet, see the gaps below.
 - `vine_wl --socket w/run/wayland-0 --vinefb w/vinefb --create WxH`
   (`app/src/main/cpp/display/wayland/`): a small Wayland server for one
   client, Waydroid's hwcomposer in single-window mode. Globals
-  wl_compositor, wl_shm, xdg_wm_base, wl_output, wl_seat (no input yet);
-  no subcompositor or viewporter, so the client stays on the
+  wl_compositor, wl_shm, xdg_wm_base, wl_output, wl_seat (touch and
+  keyboard); no subcompositor or viewporter, so the client stays on the
   single-surface path. `w/run` is bound to `/run/user/1000`.
+- Input: `vine_wl --input w/input` takes the guest agent's lines
+  (`touch`, `key`, `text`, as `GuestProtocol.kt` writes them) and sends
+  them as wl_touch/wl_keyboard events; the hwcomposer writes evdev
+  events into `/dev/input/wl_{touch,keyboard}_events` FIFOs, which the
+  image's EventHub opens as `wayland_touch` and `wayland_keyboard`
+  (Generic.kl). Android keycodes map to evdev codes below 239 (the
+  hwcomposer's limit): APP_SWITCH has none. `vine_wl --send w/input
+  LINE...` injects from a shell.
 - `/vendor/waydroid.prop`, what Waydroid's host writes: gralloc
   `default`, egl `angle`, vulkan `lvp`, `sys.use_memfd=true`, GLES 3.2,
   `ro.sf.lcd_density`, plus `waydroid.background_start=false` (else the
@@ -50,6 +58,14 @@ What the engine must do to an extracted image, done today by
 - Audio HAL: Waydroid's service is 32-bit only. `vine_hal_service`
   (`rootless/hal_service.cpp`) registers the 64-bit passthrough
   implementations instead (audioserver and AudioService wait for them).
+- No keychords: `vine-rootless.rc` overrides bugreport without its
+  `keycodes`, else init opens the input FIFOs and blocks until the
+  hwcomposer writes one. `/dev/input` starts empty each boot.
+- First boot: seed `/data/system/appops.xml` with one op SystemUI
+  watches (the system package's SYSTEM_ALERT_WINDOW). LineageOS 20's
+  `AppOpsControllerImpl.fetchCurrentActiveOps` iterates
+  `getPackagesForOps()` without a null check and SystemUI crash-loops
+  while no app has used one of those ops.
 - Start init with its cwd at the guest's `/`: services inherit it, and a
   cwd outside the view reads back as `getcwd` -ENOENT (libopenjdk crashes
   on it in `System_specialProperties`).

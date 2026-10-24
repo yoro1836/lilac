@@ -46,7 +46,8 @@ RGBA rows) and kills every guest process at the end, reparented zygotes
 included.
 
 Knobs: `T` (seconds to run, default 20), `WRAP=bin/faultcatch` (init and
-binderd under the crash dumper), `BINDERD` (another binderd build),
+binderd under the crash dumper; `BINDERD_WRAP` for binderd alone),
+`BINDERD` (another binderd build),
 `BINDERD_FLAGS` (`-v`), `CGROUP_FLAG=` (drop `--cgroup`), `LOGCAT_DELAY`,
 `KMSG_LINES`, `SIZE` and `DENSITY` (the display), `DIAG` (a guest shell
 command run before teardown, output in `w/diag.txt`).

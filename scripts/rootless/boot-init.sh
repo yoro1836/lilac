@@ -58,6 +58,11 @@ printf '%s\n' \
   '    capabilities BLOCK_SUSPEND SYS_NICE' \
   '    onrestart restart audioserver' \
   '    override' \
+  '' \
+  'service bugreport /system/bin/dumpstate -d -p -z' \
+  '    oneshot' \
+  '    disabled' \
+  '    override' \
   > "$P/vine-rootless.rc"
 chmod 644 "$P/vine-rootless.rc"
 # What Waydroid's host writes: no GPU device, so software GLES (ANGLE on
@@ -73,16 +78,30 @@ printf '%s\n' \
   'waydroid.stub_sensors_hal=1' \
   > "$R/vendor/waydroid.prop"
 chmod 644 "$R/vendor/waydroid.prop"
+# A first boot has no app ops recorded, and LineageOS 20's SystemUI then
+# crashes on getPackagesForOps() returning null (fetchCurrentActiveOps).
+# Seed one that persists: SYSTEM_ALERT_WINDOW allowed for the system package.
+if [ ! -e "$W/data/system/appops.xml" ]; then
+  mkdir -p "$W/data/system"
+  printf '%s\n' "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>" \
+    '<app-ops v="1">' '<pkg n="android">' '<uid n="1000">' '<op n="24" m="0" />' '</uid>' '</pkg>' '</app-ops>' \
+    > "$W/data/system/appops.xml"
+fi
 # Waydroid's /dev nodes: libbinder access()es the driver before opening it.
 for b in binder hwbinder vndbinder; do ln -sfn binderfs/$b "$R/dev/$b"; done
 # What first-stage init would have created.
 mkdir -p "$R/dev/socket" "$R/dev/pts" "$R/mnt/vendor" "$R/mnt/product"
 # The display: hwcomposer.waydroid connects to /run/user/1000/wayland-0,
-# frames land in w/vinefb.
-mkdir -p "$W/run" "$R/run/user/1000"
-bin/vine_wl --socket "$W/run/wayland-0" --vinefb "$W/vinefb" --create "${SIZE:-720x1440}" 2> "$W/vine_wl.log" &
+# frames land in w/vinefb, input lines go to w/input (vine_wl --send).
+# The hwcomposer hands touches and keys to InputFlinger through FIFOs
+# it makes in /dev/input.
+# No keychords (bugreport's are overridden above): init would open those
+# FIFOs and block until the hwcomposer writes one.
+rm -rf "$R/dev/input"
+mkdir -p "$W/run" "$R/run/user/1000" "$R/dev/input"
+bin/vine_wl --socket "$W/run/wayland-0" --vinefb "$W/vinefb" --create "${SIZE:-720x1440}" --input "$W/input" 2> "$W/vine_wl.log" &
 WL=$!
-( ${WRAP:+$B/$WRAP} ${BINDERD:-bin/binderd} ${BINDERD_FLAGS:-} "$W/binderfs"; echo "--- binderd exited: $?" >&2 ) 2> "$W/binderd.log" &
+( ${WRAP:+$B/$WRAP} ${BINDERD_WRAP:+$B/$BINDERD_WRAP} ${BINDERD:-bin/binderd} ${BINDERD_FLAGS:-} "$W/binderfs"; echo "--- binderd exited: $?" >&2 ) 2> "$W/binderd.log" &
 BD=$!
 i=0; while [ ! -e "$W/binderfs/ready" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
 # init (and every service it forks) starts at the guest's /.
