@@ -175,15 +175,18 @@ does it. Keep a snapshot only while iterating often.
    `/proc/cmdline`, `<instance>/data`, `<instance>/run/`.
 2. The app starts the compositor on `<instance>/run/wayland-0`.
 3. The helper starts binderd, then
-   `tawcroot --init --cgroup --owners -r <rootfs> -b <instance>/data:/data -b <instance>/run:/run/user/1000 -- /init`.
+   `tawcroot --init --all-caps --cgroup --owners -r <rootfs> -b <instance>/data:/data -b <instance>/run:/run/user/1000 -- /init`
+   (rootfs preparation and binds: [rootless-boot.md](rootless-boot.md)).
 4. The vine agent reports boot completion, apps, icons, as on the root path.
 
 ## Milestones
 
 1. ~~binderd + tawcroot shim, host tests: transaction/reply,
    refcounts, fd passing, death notification, scatter-gather.~~ Done.
-2. On device: servicemanager + hwservicemanager + `service list` under
-   tawcroot.
+2. ~~On device: servicemanager + hwservicemanager + `service list` under
+   tawcroot.~~ Done.
+   init boots through to system_server, which waits for a display:
+   [rootless-boot.md](rootless-boot.md).
 3. Compositor in the app, surfaceflinger + composer HAL → first frame.
 4. system_server, launcher, input; freeze the ROM patch list.
 5. Rootless engine behind the helper protocol, `.vrom` extraction, UI switch.
