@@ -118,5 +118,5 @@ echo "--- init.log"; tail -40 "$W/init.log"
 echo "--- kmsg"; tr "\0" "\n" < "$R/dev/kmsg" | grep -v "Reboot ending\|reboot call returned\|InitFatalReboot" | head -${KMSG_LINES:-40}
 echo "--- binderd.log"; tail -5 "$W/binderd.log"
 echo "--- vine_wl.log"; tail -5 "$W/vine_wl.log"
-kill -9 $IP $LP 2>/dev/null; pkill -f "bin/binderd" 2>/dev/null; kill $WL 2>/dev/null
+kill -9 $IP $LP 2>/dev/null; pkill -f -- "$W/binderfs" 2>/dev/null; kill $WL 2>/dev/null
 guests_kill
