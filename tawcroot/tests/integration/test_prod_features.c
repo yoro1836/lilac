@@ -138,6 +138,8 @@ static bool build_rootfs(void)
 		  "static_mount_check" },
 		{ TAWCROOT_STATIC_NET_CHECK_BIN,
 		  "static_net_check" },
+		{ TAWCROOT_STATIC_STARTSTACK_CHECK_BIN,
+		  "static_startstack_check" },
 	};
 	for (size_t i = 0; i < sizeof fixtures / sizeof fixtures[0]; i++) {
 		snprintf(p, sizeof p, "%s/bin/%s",
@@ -649,6 +651,51 @@ test(prod_init_session)
 	test_true(build_rootfs());
 	const char *args[] = {
 		"-r", FAKE_ROOTFS, "--init", "--", "/bin/static_init_check", NULL
+	};
+	test_int_eq(run_with(args), 42);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* --init fakes nspawn's capability set; --all-caps the full one, which
+ * Android's init needs for its services. */
+test(prod_init_caps)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+	const char *nspawn[] = {
+		"-r", FAKE_ROOTFS, "--init", "--", "/bin/static_init_check", "caps", "nspawn", NULL
+	};
+	test_int_eq(run_with(nspawn), 42);
+	const char *all[] = {
+		"-r", FAKE_ROOTFS, "--init", "--all-caps", "--",
+		"/bin/static_init_check", "caps", "all", NULL
+	};
+	test_int_eq(run_with(all), 42);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* /proc/self/stat's startstack points into the guest's stack, with
+ * and without an init session. */
+test(prod_proc_stat_startstack)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+	const char *plain[] = { "-r", FAKE_ROOTFS, "--", "/bin/static_startstack_check", NULL };
+	test_int_eq(run_with(plain), 42);
+	const char *init[] = {
+		"-r", FAKE_ROOTFS, "--init", "--", "/bin/static_startstack_check", NULL
+	};
+	test_int_eq(run_with(init), 42);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* Raising a hard rlimit past the host's clamps for the fake root. */
+test(prod_init_rlimit)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--init", "--", "/bin/static_init_check", "rlimit", NULL
 	};
 	test_int_eq(run_with(args), 42);
 	rh_rmrf(FAKE_ROOTFS);

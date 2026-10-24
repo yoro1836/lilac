@@ -111,6 +111,11 @@ struct tawc_loader_exec_args {
 __attribute__((noreturn))
 void tawcroot_loader_exec(const struct tawc_loader_exec_args *args);
 
+/* The guest's initial SP, 0 before the first load. The kernel's
+ * /proc/<pid>/stat startstack points at tawcroot's own stack; bionic
+ * sizes the main thread's stack from it, so stat reports this. */
+extern uintptr_t tawcroot_guest_start_stack;
+
 /* `--exec-child <fd>` mode driver: read a serialized exec_state from
  * `state_fd` (which must be open and readable, typically a memfd) and
  * call `tawcroot_loader_exec` with the parsed args. Never returns on

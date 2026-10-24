@@ -42,6 +42,8 @@
 
 struct entry {
     uint32_t id, ro;
+    uint32_t shared;    /* also in another namespace's table: keep the backing */
+    uint32_t pad;
     char dst[256];      /* folded, no leading '/', like a bind's dst */
     char src[256];      /* host path */
     char type[32];
@@ -75,13 +77,27 @@ static long store_path(char *out, const char *name)
     return 0;
 }
 
+/* The session's table is <store>/mounts; a mount namespace's is
+ * <store>/mntns/<creator pid>.<seq>. */
+static long table_path(char *out, const uint32_t ns[2])
+{
+    long e = store_path(out, ns[0] ? "/mntns/" : "/mounts");
+    if (e || !ns[0]) return e;
+    size_t n = tawc_strlen(out);
+    if (tawc_str_append_dec(out, TAWCROOT_PATH_SCRATCH_SIZE, &n, ns[0]) ||
+        tawc_str_append(out, TAWCROOT_PATH_SCRATCH_SIZE, &n, ".") ||
+        tawc_str_append_dec(out, TAWCROOT_PATH_SCRATCH_SIZE, &n, ns[1]))
+        return TAWC_ENAMETOOLONG;
+    return 0;
+}
+
 /* A fresh descriptor per lock: flock is per open file description, and
  * forked processes share ours. Returns the fd (locked) or -errno. */
 static long lock(int op)
 {
     TAWCROOT_PATH_SCRATCH_AUTO(scratch);
     char *path = scratch->buf[0];
-    long e = store_path(path, "/mounts");
+    long e = table_path(path, tawcroot_namespace.mnt_ns);
     if (e < 0) return e;
     long fd = tawc_openat(AT_FDCWD, path, O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0);
     if (fd < 0) return fd;
@@ -101,7 +117,7 @@ static long map_table(int create)
 {
     TAWCROOT_PATH_SCRATCH_AUTO(scratch);
     char *path = scratch->buf[0];
-    long fd = store_path(path, "/mounts");
+    long fd = table_path(path, tawcroot_namespace.mnt_ns);
     if (fd < 0) return fd;
     fd = tawc_openat(AT_FDCWD, path, O_RDWR | O_CLOEXEC | O_NOFOLLOW | (create ? O_CREAT : 0), 0600);
     if (fd < 0) return fd;
@@ -139,15 +155,19 @@ long tawcroot_mounts_setup(void)
 {
     TAWCROOT_PATH_SCRATCH_AUTO(scratch);
     char *path = scratch->buf[1];
-    long e = store_path(path, "/mnt");
-    if (e < 0) return e;
     (void)TAWC_RAW(TAWC_SYS_mkdirat, AT_FDCWD, (long)tawcroot_store_host_path, 0700, 0, 0, 0);
-    (void)TAWC_RAW(TAWC_SYS_mkdirat, AT_FDCWD, (long)path, 0700, 0, 0, 0);
-    long dir = tawc_openat(AT_FDCWD, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW, 0);
-    if (dir < 0) return dir;
-    tawcroot_wipe_dir((int)dir);
-    tawc_close((int)dir);
-    e = map_table(1);
+    static const char *const fresh[] = { "/mnt", "/mntns" };
+    for (int k = 0; k < 2; ++k) {
+        long e = store_path(path, fresh[k]);
+        if (e < 0) return e;
+        (void)TAWC_RAW(TAWC_SYS_mkdirat, AT_FDCWD, (long)path, 0700, 0, 0, 0);
+        long dir = tawc_openat(AT_FDCWD, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW, 0);
+        if (dir < 0) return dir;
+        tawcroot_wipe_dir((int)dir);
+        tawc_close((int)dir);
+    }
+    tawcroot_namespace.mnt_ns[0] = tawcroot_namespace.mnt_ns[1] = 0;
+    long e = map_table(1);
     if (e) return e;
     long fd = lock(2 /*LOCK_EX*/);
     if (fd < 0) return fd;
@@ -169,6 +189,44 @@ void tawcroot_mounts_attach(void)
         g_tab = 0;
     }
     g_seen = 0;
+}
+
+/* The new table starts as a copy, so binds need no re-mirroring. The old
+ * mapping stays: other threads may still be reading it. */
+long tawcroot_mounts_unshare(void)
+{
+    if (!g_tab) return TAWC_EPERM;
+    if (!own_view()) return TAWC_EINVAL;   /* a CLONE_VM child shares our table */
+    tawcroot_mounts_sync();
+    TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+    char *path = scratch->buf[1];
+    uint32_t ns[2] = { (uint32_t)tawc_getpid(), 0 };
+    long fd = TAWC_EEXIST;
+    while (fd == TAWC_EEXIST && ++ns[1] < 4096) {
+        long e = table_path(path, ns);
+        if (e) return e;
+        fd = tawc_openat(AT_FDCWD, path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    }
+    if (fd < 0) return fd;
+    long e = TAWC_RAW(TAWC_SYS_ftruncate, fd, sizeof(struct table), 0, 0, 0, 0);
+    long p = e ? e : tawc_mmap(0, sizeof(struct table), PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
+    tawc_close((int)fd);
+    if (p < 0 && p >= -4095) {
+        (void)TAWC_RAW(TAWC_SYS_unlinkat, AT_FDCWD, (long)path, 0, 0, 0, 0);
+        return p;
+    }
+    struct table *t = (struct table *)p;
+    long lk = lock(2 /*LOCK_EX*/);
+    if (lk < 0) return lk;
+    for (int i = 0; i < MAX_MOUNTS; ++i)
+        if (g_tab->e[i].id) g_tab->e[i].shared = 1;
+    memcpy(t, g_tab, sizeof *t);
+    tawc_close((int)lk);
+    g_tab = t;
+    g_seen = t->gen;
+    tawcroot_namespace.mnt_ns[0] = ns[0];
+    tawcroot_namespace.mnt_ns[1] = ns[1];
+    return 0;
 }
 
 /* --- mirroring ---------------------------------------------------------- */
@@ -341,7 +399,13 @@ static long new_backing(char *out, uint32_t id, const char *data)
     size_t n = 0;
     if (store_path(out, "/mnt/") < 0) return TAWC_ENOENT;
     n = tawc_strlen(out);
-    if (tawc_str_append_dec(out, TAWCROOT_PATH_SCRATCH_SIZE, &n, id)) return TAWC_ENAMETOOLONG;
+    const uint32_t *ns = tawcroot_namespace.mnt_ns;
+    /* Copied tables share next_id: a namespace's ids get its own prefix. */
+    if ((ns[0] && (tawc_str_append_dec(out, TAWCROOT_PATH_SCRATCH_SIZE, &n, ns[0]) ||
+                   tawc_str_append(out, TAWCROOT_PATH_SCRATCH_SIZE, &n, ".") ||
+                   tawc_str_append_dec(out, TAWCROOT_PATH_SCRATCH_SIZE, &n, ns[1]) ||
+                   tawc_str_append(out, TAWCROOT_PATH_SCRATCH_SIZE, &n, "-"))) ||
+        tawc_str_append_dec(out, TAWCROOT_PATH_SCRATCH_SIZE, &n, id)) return TAWC_ENAMETOOLONG;
     long mode = 01777;
     for (const char *p = data; p && *p; ) {
         if (tawc_starts_with(p, "mode=")) {
@@ -421,6 +485,10 @@ long tawcroot_mounts_mount(const char *gsource, const char *gtarget, const char 
                            unsigned long flags, const char *gdata)
 {
     if (!g_tab) return TAWC_EPERM;
+    /* Propagation types: every emulated mount is private to its table. */
+    if ((flags & (MS_SHARED | MS_PRIVATE | MS_SLAVE | MS_UNBINDABLE)) &&
+        !(flags & (MS_BIND | MS_MOVE | MS_REMOUNT)))
+        return 0;
     TAWCROOT_PATH_SCRATCH_AUTO(scratch);
     tawcroot_mounts_sync();
     __atomic_add_fetch(&g_mounting, 1, __ATOMIC_ACQUIRE);
@@ -450,7 +518,7 @@ long tawcroot_mounts_umount(const char *gtarget, int flags)
         /* A tmpfs's backing directory goes away with it; open files in
          * it keep working, like a lazily detached tmpfs. */
         size_t n = 0;
-        if (m->type[0] && !store_path(dead, "/mnt/.dead-")) {
+        if (m->type[0] && !m->shared && !store_path(dead, "/mnt/.dead-")) {
             n = tawc_strlen(dead);
             (void)tawc_str_append_dec(dead, TAWCROOT_PATH_SCRATCH_SIZE, &n, m->id);
             (void)TAWC_RAW(TAWC_SYS_renameat2, AT_FDCWD, (long)m->src, AT_FDCWD, (long)dead, 0, 0);
@@ -548,7 +616,15 @@ long tawcroot_mounts_epoll_ctl(const tawcroot_syscall_args *a, ucontext_t *uc)
         if (r < 0) { tawc_close((int)in); return r; }
         g_watch[i].sub = (int)r;
     }
-    struct { uint32_t events; uint64_t data; } __attribute__((packed)) ev;
+    /* The kernel packs epoll_event on x86_64 only; arm64 pads data to 8. */
+    struct {
+        uint32_t events;
+        uint64_t data;
+    }
+#if defined(__x86_64__)
+    __attribute__((packed))
+#endif
+    ev;
     long evp = 0;
     if (a->b != 2 /*EPOLL_CTL_DEL*/) {
         long e = tawc_copy_from_guest(&ev, sizeof ev, (const void *)(uintptr_t)a->d);

@@ -6,6 +6,7 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include "namespace.h"
+#include "loader_exec.h"
 #include "cgroup.h"
 #include "mounts.h"
 #include "uts.h"
@@ -91,6 +92,7 @@ static long new_user(void)
 
 void tawcroot_namespace_restore(void)
 {
+    tawcroot_namespace.securebits &= ~(1u << 4);   /* exec clears SECBIT_KEEP_CAPS */
     if (tawcroot_namespace.user)
         for (int i = 0; i < 3; ++i)
             (void)tawcroot_fd_record_reserved(tawcroot_namespace.maps[i]);
@@ -109,8 +111,25 @@ long tawcroot_namespace_prctl(long option, long arg)
         return 0;
     case PR_CAP_AMBIENT:
         return arg == PR_CAP_AMBIENT_IS_SET ? 0 : arg >= 2 && arg <= 4 ? 0 : TAWC_EINVAL;
+    /* The host app's securebits are locked: even PR_SET_KEEPCAPS fails.
+     * Emulated, including the guest's own locks. */
     case PR_SET_SECUREBITS:
+        /* The kernel's rules: a lock (odd bit) freezes the bit below it
+         * and itself. */
+        if ((unsigned long)arg > 0xff ||
+            ((ns->securebits ^ (uint32_t)arg) & (ns->securebits & 0xaau) >> 1) ||
+            (ns->securebits & 0xaau & ~(uint32_t)arg)) return TAWC_EPERM;
+        ns->securebits = (uint32_t)arg;
         return 0;
+    case PR_GET_SECUREBITS:
+        return ns->securebits;
+    case PR_SET_KEEPCAPS:
+        if (arg != 0 && arg != 1) return TAWC_EINVAL;
+        if (ns->securebits & (1u << 5)) return TAWC_EPERM;   /* SECBIT_KEEP_CAPS_LOCKED */
+        ns->securebits = (ns->securebits & ~(1u << 4)) | (uint32_t)arg << 4;
+        return 0;
+    case PR_GET_KEEPCAPS:
+        return ns->securebits >> 4 & 1;
     default:
         return TAWC_ENOSYS;
     }
@@ -127,7 +146,8 @@ static void put_pid(char *out, size_t cap, size_t *n, long v)
     (void)tawc_str_append_dec(out, cap, n, fake_pid(v));
 }
 
-/* /proc/<pid>/stat: pid, ppid, pgrp and session fields. */
+/* /proc/<pid>/stat: pid, ppid, pgrp and session fields; our own
+ * startstack (field 28) is the guest's. */
 static size_t rewrite_stat(const char *in, char *out, size_t cap, long pid)
 {
     size_t n = 0;
@@ -144,7 +164,9 @@ static size_t rewrite_stat(const char *in, char *out, size_t cap, long pid)
         if (*p == ' ') { if (n + 1 < cap) out[n++] = ' ', out[n] = 0; ++p; ++field; continue; }
         const char *end = p;
         while (*end && *end != ' ') ++end;
-        if (field >= 4 && field <= 6) {
+        if (field == 28 && pid == tawc_getpid() && tawcroot_guest_start_stack) {
+            (void)tawc_str_append_dec(out, cap, &n, (long)tawcroot_guest_start_stack);
+        } else if (field >= 4 && field <= 6) {
             long v = 0;
             for (const char *d = p; d < end && *d >= '0' && *d <= '9'; ++d) v = v * 10 + (*d - '0');
             if (field == 4 && pid == tawcroot_namespace.init_pid) v = 0;
@@ -242,10 +264,12 @@ static int put_cap(char *out, size_t cap, size_t *n, const char *line, long pid)
 }
 
 /* With a fake init, /proc/<pid>/stat and status show it as pid 1 and as
- * the parent of what it adopted. Other pids stay host values. */
+ * the parent of what it adopted. Other pids stay host values. Without
+ * one, only our own stat is rewritten (startstack). */
 long tawcroot_namespace_proc_open(const char *path, int flags)
 {
-    if (!tawcroot_namespace.init_pid || !tawc_starts_with(path, "/proc/") ||
+    long init_pid = tawcroot_namespace.init_pid;
+    if ((!init_pid && !tawcroot_guest_start_stack) || !tawc_starts_with(path, "/proc/") ||
         (flags & O_ACCMODE) != O_RDONLY || (flags & (O_PATH | O_DIRECTORY)))
         return TAWC_ENOSYS;
     const char *p = path + 6;
@@ -255,7 +279,7 @@ long tawcroot_namespace_proc_open(const char *path, int flags)
     else {
         while (*p >= '0' && *p <= '9') pid = pid * 10 + (*p++ - '0');
         if (!pid || *p++ != '/') return TAWC_ENOSYS;
-        if (pid == 1) pid = tawcroot_namespace.init_pid;
+        if (pid == 1 && init_pid) pid = init_pid;
     }
     const char *rest = p;
     if (tawc_starts_with(p, "task/")) {
@@ -292,6 +316,7 @@ long tawcroot_namespace_proc_open(const char *path, int flags)
     }
     int status = tawc_streq(p, "status");
     if (!status && !tawc_streq(p, "stat")) return TAWC_ENOSYS;
+    if (!init_pid && (status || pid != tawc_getpid())) return TAWC_ENOSYS;
     char *real = scratch->buf[0], *in = scratch->buf[1], *out = scratch->buf[2];
     size_t n = 0;
     if (tawc_str_append(real, TAWCROOT_PATH_SCRATCH_SIZE, &n, "/proc/") ||
@@ -373,7 +398,8 @@ long tawcroot_namespace_init_session(void)
     /* A real init starts with every capability; services drop from
      * there. Emulated like a user namespace's (namespace_cap). */
     struct tawc_namespace *ns = &tawcroot_namespace;
-    static const int init_lazy[] = { TAWC_SYS_fstatfs, TAWC_SYS_uname, __NR_sethostname, __NR_setdomainname };
+    static const int init_lazy[] = { TAWC_SYS_fstatfs, TAWC_SYS_uname, __NR_sethostname, __NR_setdomainname,
+                                     __NR_setrlimit, __NR_prlimit64 };
     r = tawcroot_install_lazy_filter(init_lazy, sizeof init_lazy / sizeof init_lazy[0]);
     if (r) return r;
     ns->session |= TAWC_NS_INIT_SESSION;
@@ -387,6 +413,19 @@ long tawcroot_namespace_init_session(void)
         ns->capbset_dropped[1] = ~0u;
     }
     return 0;
+}
+
+/* Android's init hands services capabilities beyond nspawn's set
+ * (CAP_SYSLOG, CAP_BLOCK_SUSPEND, ...) and aborts them if capset
+ * refuses: start from the full set instead, as a real init does. */
+void tawcroot_namespace_all_caps(void)
+{
+    struct tawc_namespace *ns = &tawcroot_namespace;
+    ns->capabilities[0] = ns->capabilities[1] = 0xffffffffu;
+    ns->capabilities[3] = ns->capabilities[4] = 0x1ff;   /* through CAP_CHECKPOINT_RESTORE */
+    ns->capabilities[2] = ns->capabilities[5] = 0;
+    ns->capbset_dropped[0] = 0;
+    ns->capbset_dropped[1] = ~0x1ffu;
 }
 
 /* No pid namespace tears init's children down with it, so its direct
@@ -435,12 +474,17 @@ static long unshare_namespace(const tawcroot_syscall_args *a, ucontext_t *uc)
 {
     (void)uc;
     unsigned long flags = (unsigned long)a->a;
+    int init = (tawcroot_namespace.session & TAWC_NS_INIT_SESSION) != 0;
     /* An init's services expect EPERM for namespaces they can't get and
-     * then run unsandboxed ("assuming containerized execution"). */
-    if (flags & ~(CLONE_NEWUSER | CLONE_NEWNET | CLONE_FS))
-        return tawcroot_namespace.session & TAWC_NS_INIT_SESSION ? TAWC_EPERM : TAWC_EINVAL;
+     * then run unsandboxed ("assuming containerized execution"). Mount
+     * namespaces are emulated (mounts.c); like the kernel's, they
+     * imply CLONE_FS. */
+    if (flags & ~(CLONE_NEWUSER | CLONE_NEWNET | CLONE_FS | (init ? CLONE_NEWNS : 0)))
+        return init ? TAWC_EPERM : TAWC_EINVAL;
+    if (flags & CLONE_NEWNS) flags |= CLONE_FS;
     long result = (flags & CLONE_FS) ? TAWC_RAW(TAWC_SYS_unshare, CLONE_FS, 0, 0, 0, 0, 0) : 0;
     if (!result && (flags & CLONE_FS)) tawcroot_fs_detach();
+    if (!result && (flags & CLONE_NEWNS)) result = tawcroot_mounts_unshare();
     if (!result && (flags & CLONE_NEWUSER)) result = new_user();
     return result;
 }
@@ -484,6 +528,35 @@ static long namespace_cap(const tawcroot_syscall_args *a, ucontext_t *uc)
             (next[i+2] & ~(tawcroot_namespace.capabilities[i+2] | tawcroot_namespace.capabilities[i+1])))
             return TAWC_EPERM;
     memcpy(tawcroot_namespace.capabilities, next, sizeof next);
+    return 0;
+}
+
+/* Raising a hard limit needs a real CAP_SYS_RESOURCE, which the host
+ * never grants. A fake holder gets the request clamped to the host's
+ * hard limit instead of EPERM: Android's init aborts a service whose
+ * rlimit fails (bpfloader's 1 GiB RLIMIT_MEMLOCK). */
+static long namespace_rlimit(const tawcroot_syscall_args *a, ucontext_t *uc)
+{
+    (void)uc;
+    int prl = a->nr == __NR_prlimit64;
+    long pid = prl ? a->a : 0, res = prl ? a->b : a->a;
+    const void *want_p = (const void *)(uintptr_t)(prl ? a->c : a->b);
+    if (pid == 1 && tawcroot_namespace.init_pid == tawc_getpid()) pid = 0;
+    long r = prl ? TAWC_RAW(__NR_prlimit64, pid, res, a->c, a->d, 0, 0)
+                 : TAWC_RAW(__NR_setrlimit, res, a->b, 0, 0, 0, 0);
+    if (r != TAWC_EPERM || !want_p || (pid && pid != tawc_getpid()) ||
+        !(tawcroot_namespace.capabilities[0] >> 24 & 1) /* CAP_SYS_RESOURCE */)
+        return r;
+    uint64_t want[2], cur[2];
+    if (tawc_copy_from_guest(want, sizeof want, want_p) < 0) return TAWC_EFAULT;
+    if (want[0] > want[1]) return TAWC_EINVAL;
+    if (TAWC_RAW(__NR_prlimit64, 0, res, 0, (long)cur, 0, 0) < 0) return r;
+    if (want[1] > cur[1]) want[1] = cur[1];
+    if (want[0] > want[1]) want[0] = want[1];
+    long e = TAWC_RAW(__NR_prlimit64, 0, res, (long)want, 0, 0, 0);
+    if (e < 0) return e;
+    if (prl && a->d && tawc_copy_to_guest((void *)(uintptr_t)a->d, cur, sizeof cur) < 0)
+        return TAWC_EFAULT;
     return 0;
 }
 
@@ -830,6 +903,8 @@ void tawcroot_namespace_register(void)
     tawcroot_dispatch_install_lazy(TAWC_SYS_getppid, namespace_pid);
     tawcroot_dispatch_install(__NR_capget, namespace_cap);
     tawcroot_dispatch_install(__NR_capset, namespace_cap);
+    tawcroot_dispatch_install_lazy(__NR_setrlimit, namespace_rlimit);
+    tawcroot_dispatch_install_lazy(__NR_prlimit64, namespace_rlimit);
     tawcroot_dispatch_install_lazy(TAWC_SYS_write, namespace_write);
     tawcroot_dispatch_install_lazy(__NR_kill, namespace_signal);
     tawcroot_dispatch_install_lazy(__NR_tgkill, namespace_signal);

@@ -46,6 +46,8 @@
  * "no SSE/AVX" on x86_64 and aborts when the hardcoded SIMD code-path
  * gets selected anyway. Mozilla's nsTraceRefcnt stack-canary init also
  * reads AT_RANDOM but that we already pass through. */
+uintptr_t tawcroot_guest_start_stack;
+
 static uint64_t  g_host_at_hwcap         = 0;
 static uint64_t  g_host_at_hwcap2        = 0;
 static uintptr_t g_host_at_sysinfo_ehdr  = 0;
@@ -469,6 +471,7 @@ void tawcroot_loader_exec(const struct tawc_loader_exec_args *args)
 	 * top-level prod entry. */
 	tawcroot_proctitle_apply(args->guest_path, eff_argc, eff_argv);
 	tawcroot_stats_guest_entering();
+	tawcroot_guest_start_stack = so.sp;
 	tawc_loader_jump(so.sp, entry);
 }
 

@@ -1,6 +1,7 @@
 /* `tawcroot --init` mount emulation: tmpfs, bind, move and umount
  * through the session's mount table, seen by an older process, an
- * exec'd image and /proc/self/mountinfo; plus the container-style
+ * exec'd image and /proc/self/mountinfo; mount namespaces
+ * (unshare(CLONE_NEWNS)) keep their changes private; plus the container-style
  * uid_map and read-only /proc/sys.
  *
  * Exit 42 on success; every other code names the failed step. */
@@ -8,6 +9,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
@@ -44,6 +46,8 @@ static int touch(const char *p)
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "vfork")) return 0;
+	if (argc > 1 && !strcmp(argv[1], "ns-exec"))   /* exec keeps the namespace */
+		return exists("/mnt/n/z") && !exists("/mnt/v/y") ? 0 : 1;
 	if (argc > 1) return exists("/mnt/t/x") ? 0 : 1;   /* after exec */
 
 	char buf[8192];
@@ -66,12 +70,14 @@ int main(int argc, char **argv)
 	/* libmount-style watch: epoll on a mountinfo fd wakes on changes. */
 	int ep = epoll_create1(EPOLL_CLOEXEC);
 	int mi = open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC);
-	struct epoll_event ev = { .events = EPOLLPRI | EPOLLIN | EPOLLET }, got;
+	struct epoll_event ev = { .events = EPOLLPRI | EPOLLIN | EPOLLET,
+				  .data.u64 = 0xb400006fcd663aa8ull }, got;
 	if (ep < 0 || mi < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, mi, &ev) != 0) return 5;
 	if (epoll_wait(ep, &got, 1, 0) != 0) return 6;
 
 	if (mount("tmpfs", "/mnt/t", "tmpfs", 0, "mode=0755") != 0) return 10;
 	if (epoll_wait(ep, &got, 1, 2000) != 1) return 7;
+	if (got.data.u64 != ev.data.u64) return 17;   /* full 64-bit data back */
 	close(open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC));   /* drains */
 	if (epoll_wait(ep, &got, 1, 0) != 0) return 8;
 	if (exists("/mnt/t/under")) return 11;
@@ -125,6 +131,29 @@ int main(int argc, char **argv)
 	if (c < 0 || waitpid(c, &status, 0) != c || !WIFEXITED(status) ||
 	    WEXITSTATUS(status) != 0) return 62;
 	if (!exists("/mnt/v/y")) return 63;
+
+	/* unshare(CLONE_NEWNS): the child's mounts and umounts stay in its
+	 * copy of the table, and it keeps that copy across exec. */
+	if (mkdir("/mnt/n", 0755) != 0) return 70;
+	int go[2], done[2];
+	if (pipe(go) != 0 || pipe(done) != 0) return 71;
+	c = fork();
+	if (c == 0) {
+		char g;
+		if (unshare(CLONE_NEWNS) != 0) _exit(1);
+		if (mount("rootfs", "/", 0, MS_SLAVE | MS_REC, 0) != 0) _exit(2);
+		if (mount("tmpfs", "/mnt/n", "tmpfs", 0, 0) != 0 || touch("/mnt/n/z") != 0) _exit(3);
+		if (umount2("/mnt/v", 0) != 0 || exists("/mnt/v/y")) _exit(4);
+		if (write(done[1], "m", 1) != 1 || read(go[0], &g, 1) != 1) _exit(5);
+		execl("/bin/static_mount_check", "static_mount_check", "ns-exec", (char *)0);
+		_exit(9);
+	}
+	char g;
+	if (c < 0 || read(done[0], &g, 1) != 1) return 72;
+	if (exists("/mnt/n/z") || !exists("/mnt/v/y")) return 73;
+	if (write(go[1], "g", 1) != 1 || waitpid(c, &status, 0) != c || !WIFEXITED(status) ||
+	    WEXITSTATUS(status) != 0) return 74;
+	if (!exists("/mnt/v/y")) return 75;   /* the child's umount kept our tmpfs */
 
 	/* Looks like a user-namespaced container. */
 	if (slurp("/proc/self/uid_map", buf, sizeof buf) < 0 ||

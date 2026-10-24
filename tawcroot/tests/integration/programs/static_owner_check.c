@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -40,7 +41,8 @@ static void expect(const char *path, int follow, unsigned uid, unsigned gid, int
 		FAIL(step);
 	}
 	struct statx sx;
-	if (statx(AT_FDCWD, path, follow ? 0 : AT_SYMLINK_NOFOLLOW, STATX_UID | STATX_GID, &sx) ||
+	/* raw syscall: bionic declares statx only from API 30 */
+	if (syscall(__NR_statx, AT_FDCWD, path, follow ? 0 : AT_SYMLINK_NOFOLLOW, STATX_UID | STATX_GID, &sx) ||
 	    sx.stx_uid != uid || sx.stx_gid != gid)
 		FAIL(step);
 	if (follow) {

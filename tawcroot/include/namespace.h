@@ -8,6 +8,8 @@ struct tawc_namespace {
     int32_t maps[3];
     uint32_t session;  /* TAWC_NS_* flags */
     uint32_t capbset_dropped[2];  /* --init: emulated bounding set */
+    uint32_t securebits;  /* --init: emulated, SECBIT_KEEP_CAPS included */
+    uint32_t mnt_ns[2];  /* emulated mount namespace: 0 = the session's, else creator pid + seq */
 };
 #define TAWC_NS_INIT_SESSION 1u
 #define TAWC_NS_CGROUP 2u        /* --cgroup: fake cgroupfs (cgroup.h) */
@@ -20,6 +22,7 @@ void tawcroot_namespace_register(void);
 void tawcroot_namespace_restore(void);
 /* `--init`: the session's first guest process is pid 1. */
 long tawcroot_namespace_init_session(void);
+void tawcroot_namespace_all_caps(void);
 long tawcroot_namespace_open(const char *path, int flags);
 /* /proc/<pid>/stat|status with the fake init as pid 1, or TAWC_ENOSYS. */
 long tawcroot_namespace_proc_open(const char *path, int flags);

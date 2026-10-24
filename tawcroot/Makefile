@@ -361,6 +361,12 @@ $(OUT)/programs/static_owner_check: $(SRC_TS)/integration/programs/static_owner_
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -static -Wl,--build-id=none $< -o $@
 
+# static_startstack_check: static C (libc.a) — /proc/self/stat's
+# startstack is in the guest's stack mapping.
+$(OUT)/programs/static_startstack_check: $(SRC_TS)/integration/programs/static_startstack_check.c | $(OUT)
+	@mkdir -p $(dir $@)
+	$(CC) -O2 -static -Wl,--build-id=none $< -o $@
+
 # binderd: the userspace binder driver (runs on the host side, not in
 # the rootfs). ASan+UBSan here so the integration tests catch its
 # memory bugs; production builds come from build.sh.

@@ -48,6 +48,7 @@ static_mount_check
 static_net_check
 static_binder_check
 static_owner_check
+static_startstack_check
 binderd
 dynamic_exit42
 dynamic_argv_check

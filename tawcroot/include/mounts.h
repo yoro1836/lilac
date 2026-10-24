@@ -10,6 +10,10 @@ void tawcroot_mounts_attach(void);
  * Cheap when it has not; called on every path translation. */
 void tawcroot_mounts_sync(void);
 
+/* unshare(CLONE_NEWNS): this process (and later forks and execs) moves
+ * to a private copy of its mount table. 0 or -errno. */
+long tawcroot_mounts_unshare(void);
+
 /* mount(2)/umount2(2) in an init session. Guest pointers. */
 long tawcroot_mounts_mount(const char *source, const char *target,
 			   const char *type, unsigned long flags,

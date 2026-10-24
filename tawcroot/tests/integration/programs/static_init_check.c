@@ -2,13 +2,19 @@
  * getpid/getppid on both sides, orphan adoption (subreaper), and that
  * init only receives signals it has a handler for, as a real namespace
  * init does. With a host pid as argv[1], also checks that the guest
- * can neither see nor signal it, kill(-1) included.
+ * can neither see nor signal it, kill(-1) included. With `caps nspawn`
+ * or `caps all`, checks the fake capability set instead; with `rlimit`,
+ * that raising a hard limit past the host's clamps instead of failing.
  *
  * Exit 42 on success; every other code names the failed step. pids go
  * through raw syscalls so libc caching can't hide the translation. */
 
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <linux/capability.h>
+#include <string.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -81,8 +87,52 @@ static int isolation(long host)
 	return 0;
 }
 
+/* What Android init does before exec'ing a service with capabilities:
+ * keep only CAP_SYSLOG + CAP_SETPCAP. nspawn's set has no CAP_SYSLOG. */
+static int caps(int all)
+{
+	struct __user_cap_header_struct h = { _LINUX_CAPABILITY_VERSION_3, 0 };
+	struct __user_cap_data_struct d[2];
+	if (syscall(SYS_capget, &h, d) != 0) return 1;
+	if (all ? d[0].permitted != 0xffffffffu || d[1].permitted != 0x1ff
+		: d[0].permitted != 0xfdecafffu || d[1].permitted != 0) return 2;
+	if (prctl(PR_CAPBSET_READ, CAP_SYSLOG) != all) return 3;
+	memset(d, 0, sizeof d);
+	d[0].permitted = d[0].effective = 1u << CAP_SETPCAP;
+	d[1].permitted = d[1].inheritable = 1u << (CAP_SYSLOG - 32);
+	long r = syscall(SYS_capset, &h, d);
+	if (all ? r != 0 : r != -1 || errno != EPERM) return 4;
+	/* Shadow securebits: keepcaps, then its lock (as Android's init). */
+	if (prctl(PR_SET_KEEPCAPS, 1) != 0 || prctl(PR_GET_KEEPCAPS) != 1) return 5;
+	if (prctl(PR_GET_SECUREBITS) != 1 << 4) return 6;
+	if (prctl(PR_SET_SECUREBITS, (1 << 4) | (1 << 5)) != 0) return 7;
+	if (prctl(PR_SET_KEEPCAPS, 0) != -1 || errno != EPERM) return 8;
+	if (prctl(PR_SET_SECUREBITS, 1 << 4) != -1 || errno != EPERM) return 9;
+	return 0;
+}
+
+static int rlimit(void)
+{
+	struct rlimit old, big = { RLIM_INFINITY, RLIM_INFINITY }, now;
+	if (getrlimit(RLIMIT_MEMLOCK, &old) != 0) return 1;
+	if (setrlimit(RLIMIT_MEMLOCK, &big) != 0) return 2;
+	if (getrlimit(RLIMIT_MEMLOCK, &now) != 0) return 3;
+	if (now.rlim_max < old.rlim_max || now.rlim_cur != now.rlim_max) return 4;
+	big.rlim_cur = RLIM_INFINITY; big.rlim_max = 0;
+	if (setrlimit(RLIMIT_MEMLOCK, &big) == 0 || errno != EINVAL) return 5;
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
+	if (argc > 1 && !strcmp(argv[1], "rlimit")) {
+		int e = rlimit();
+		return e ? 70 + e : 42;
+	}
+	if (argc > 2 && !strcmp(argv[1], "caps")) {
+		int e = caps(!strcmp(argv[2], "all"));
+		return e ? 60 + e : 42;
+	}
 	if (raw_getpid() != 1) return 1;
 	if (raw_getppid() != 0) return 2;
 	if (in_child(child_ids) != 0) return 3;

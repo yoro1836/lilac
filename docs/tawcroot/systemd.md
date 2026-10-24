@@ -23,6 +23,14 @@ subreaper. On top of that, in an init session:
   default set (`0xfdecafff`, bounding set dropped to match) and
   `PR_CAPBSET_READ/DROP`, `PR_CAP_AMBIENT`, `PR_SET_SECUREBITS` succeed
   against shadow state; `/proc/<pid>/status` `Cap*` lines show it.
+  `--all-caps` starts from the full set instead (Android's init aborts
+  services whose capset is refused, e.g. logd's CAP_SYSLOG).
+  Securebits are shadowed too (`PR_{GET,SET}_SECUREBITS`,
+  `PR_{GET,SET}_KEEPCAPS`, with the kernel's lock rules; exec clears
+  `SECBIT_KEEP_CAPS`): the host app's are locked.
+- `setrlimit`/`prlimit64` that the host refuses for raising a hard limit
+  are clamped to the host's hard limit for a holder of the fake
+  CAP_SYS_RESOURCE (bpfloader's 1 GiB `RLIMIT_MEMLOCK`).
 - Looks like a user-namespaced container: `uid_map`/`gid_map` read
   `0 <uid> 1`, `setgroups` reads `deny`, and `/proc/*/ns/user` stats
   with a non-init inode. systemd then skips units it can't run there
@@ -42,7 +50,14 @@ Code: `src/mounts.c`. The session has one mount table, a flock-guarded
 shared mmap at `<store>/mounts` (wiped at start, like
 `<store>/mnt/`). Every process mirrors it into its bind table (binds
 with `mount_id`) on the next path translation after the table's
-generation moves, so there is no per-process mount namespace.
+generation moves.
+`unshare(CLONE_NEWNS)` (implies `CLONE_FS`) copies the current table to
+`<store>/mntns/<pid>.<seq>` and moves the process there; forks share it
+and exec re-attaches through `tawc_namespace.mnt_ns`. Inherited entries
+are marked shared, so an umount in one namespace keeps a tmpfs backing
+the other still uses; a namespace's new backing dirs are named
+`mnt/<pid>.<seq>-<id>`. Everything is private: no propagation between
+namespaces (zygote's `MS_SLAVE` is accepted and means nothing).
 A `CLONE_VM` child (vfork, `posix_spawn`) shares its parent's bind
 table but not its fds, so it never mirrors; it routes through the
 parent's view until its exec builds its own.
@@ -67,8 +82,9 @@ parent's view until its exec builds its own.
   `mount_setattr`) and `statmount`/`listmount` are `ENOSYS`; systemd
   and util-linux fall back to `mount(2)`.
 
-Gaps: no mount namespaces (a service's private mounts are global);
-emulated mounts are invisible to processes outside the session.
+Gaps: no mount propagation, no `setns`/`/proc/<pid>/ns/mnt`, no
+`clone(CLONE_NEWNS)`; namespace tables are never collected during a
+session; emulated mounts are invisible to processes outside the session.
 
 ## Fake cgroup v2 (`--cgroup`)
 Code: `src/cgroup.c`. Requires `--init`-style startup; set up in main

@@ -668,3 +668,31 @@ test(hosted_xattr_rootfs_uses_host_path)
 	tawcroot_test_raw_hook = NULL;
 	th_teardown(&v);
 }
+
+/* An app uid may not relabel: a denied security.selinux write succeeds
+ * without effect, other denied xattr writes keep their errno. */
+static bool deny_setxattr(long nr, const long args[6], long *ret)
+{
+	(void)args;
+	if (nr != TAWC_SYS_lsetxattr && nr != TAWC_SYS_setxattr) return false;
+	*ret = -EACCES;
+	return true;
+}
+
+test(hosted_xattr_selinux_label_write_is_accepted)
+{
+	th_view v;
+	th_setup(&v, "xattr-selinux");
+	static const char label[] = "u:object_r:system_file:s0";
+	tawcroot_test_raw_hook = deny_setxattr;
+	test_int_eq(th_sys(TAWC_SYS_lsetxattr, "/etc/probe", "security.selinux",
+			   label, sizeof label, 0, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_setxattr, "/etc/probe", "security.selinux",
+			   label, sizeof label, 0, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_lsetxattr, "/etc/probe", "user.k",
+			   "v1", 2, 0, 0), -EACCES);
+	test_int_eq(th_sys(TAWC_SYS_lsetxattr, "/etc/probe", "security.selinux",
+			   label, 0, 0, 0), -EACCES);
+	tawcroot_test_raw_hook = NULL;
+	th_teardown(&v);
+}

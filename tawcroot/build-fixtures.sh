@@ -154,6 +154,7 @@ build_static_c static_mount_check
 build_static_c static_net_check
 build_static_c static_binder_check
 build_static_c static_owner_check
+build_static_c static_startstack_check
 build_binderd
 build_dynamic dynamic_exit42
 build_dynamic dynamic_argv_check

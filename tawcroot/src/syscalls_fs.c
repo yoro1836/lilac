@@ -282,9 +282,9 @@ static long handle_openat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	if (binder != TAWC_ENOSYS) return binder;
 	long nsfd = tawcroot_namespace_open(path, flags);
 	if (nsfd != TAWC_ENOSYS) return nsfd;
+	long pf = tawcroot_namespace_proc_open(path, flags);
+	if (pf != TAWC_ENOSYS) return pf;
 	if (tawcroot_namespace.init_pid) {
-		long pf = tawcroot_namespace_proc_open(path, flags);
-		if (pf != TAWC_ENOSYS) return pf;
 		pf = tawcroot_mounts_proc_open(path, flags);
 		if (pf != TAWC_ENOSYS) return pf;
 		pf = tawcroot_uts_proc_open(path, flags);
@@ -3002,12 +3002,21 @@ static long handle_statfs(const tawcroot_syscall_args *args, ucontext_t *uc)
  * path rather than a host-relative error. */
 /* Virtual root cannot grant Android capabilities. Accept well-formed package
  * metadata writes only after the actual kernel operation denied privilege.
- * No file capability is installed or reported by getxattr. */
+ * No file capability is installed or reported by getxattr.
+ *
+ * Likewise for SELinux labels: an app uid may not relabel, but a guest's
+ * restorecon (init, apexd) treats that as fatal. A denied label write
+ * succeeds without effect; getxattr keeps reporting the host label. */
 static long capability_metadata(long result, const tawcroot_syscall_args *args)
 {
-	if (result != TAWC_EPERM || tawcroot_identity_euid() != 0) return result;
+	if (result != TAWC_EPERM && result != TAWC_EACCES) return result;
 	char name[32];
-	if (tawc_copy_string_from_guest(name, sizeof name, (void *)args->b) < 0 ||
+	if (tawc_copy_string_from_guest(name, sizeof name, (void *)args->b) < 0)
+		return result;
+	if (tawc_streq(name, "security.selinux"))
+		return args->d > 0 && args->d < 256 && !(args->e & ~3L) && args->e != 3
+			? 0 : result;
+	if (result != TAWC_EPERM || tawcroot_identity_euid() != 0 ||
 	    !tawc_streq(name, "security.capability")) return result;
 	if (args->e & ~3L || args->e == 3) return TAWC_EINVAL;
 	uint32_t value[6];

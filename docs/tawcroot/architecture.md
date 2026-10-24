@@ -186,6 +186,12 @@ serialized bytes, so they agree; the state is authoritative. The
 re-exec'd tawcroot treats that environment purely as guest payload;
 `--exec-child` does not read internal config from it.
 
+The synthesized stack is a fresh 8 MiB mapping, not the kernel's
+`[stack]`, so `/proc/self/stat`'s startstack (field 28) is rewritten
+to the guest's initial SP (`tawcroot_guest_start_stack`): bionic sizes
+the main thread's stack from it (`pthread_getattr_np`), and ART puts
+its stack guard there.
+
 Preferred implementation is `memfd_create("tawcroot-exec-state",
 MFD_CLOEXEC)` followed by clearing `FD_CLOEXEC` only on the fd passed
 to `execveat`. If `memfd_create` is unavailable or blocked on a
