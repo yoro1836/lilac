@@ -44,6 +44,7 @@
 #include "fdtab.h"
 #include "identity.h"
 #include "namespace.h"
+#include "owners.h"
 #include "io.h"
 #include "linkobjs.h"
 #include "linkstore.h"
@@ -474,7 +475,16 @@ static long handle_openat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	 * needs the kernel to follow through the host root, not the
 	 * bind src. See test_prod_rootfs.c::prod_rootfs_cross_bind_abs_symlink
 	 * and docs/tawcroot/path-translation.md "Cross-bind absolute symlinks". */
+	/* --owners: an O_CREAT that actually creates records the creator. */
+	int creating = 0;
+	if (tawcroot_owners_on() && (flags & O_CREAT)) {
+		struct stat probe;
+		creating = (flags & O_EXCL) ||
+			TAWC_RAW(TAWC_SYS_fstatat, t.fd, (long)p, (long)&probe,
+				 AT_SYMLINK_NOFOLLOW, 0, 0) == TAWC_ENOENT;
+	}
 	long fd = tawc_openat(t.fd, p, flags, mode);
+	if (creating && fd >= 0) tawcroot_owners_created_fd((int)fd);
 
 	/* Android SELinux denies `open` on the app's memfds, so a guest
 	 * can't get a read-only description of its own memfd (Firefox's
@@ -579,6 +589,10 @@ static unsigned long fd_object_nlink(int fd, unsigned int mode,
  * output layout — bionic's `struct stat` is defined to match. */
 static void decorate_stat(struct stat *st)
 {
+	if (tawcroot_owners_on()) {
+		tawcroot_owners_stat(st);
+		return;
+	}
 	if (tawcroot_identity_euid() != 0 && !(st->st_mode & 06000)) return;
 	st->st_uid = 0;
 	st->st_gid = 0;
@@ -1311,6 +1325,7 @@ static long handle_mkdirat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	if (e) return e;
 	const char *p = t.is_root ? "." : t.path;
 	long rv = TAWC_RAW(TAWC_SYS_mkdirat, t.fd, (long)p, args->c, 0, 0, 0);
+	if (!rv && tawcroot_owners_on()) tawcroot_owners_created_at(t.fd, p);
 	if (!rv && cgroup_on() &&
 	    tawcroot_cgroup_locate(t.fd, p, scratch->buf[2], TAWCROOT_PATH_SCRATCH_SIZE))
 		tawcroot_cgroup_mkdir(t.fd, p, scratch->buf[2]);
@@ -1351,6 +1366,7 @@ static long handle_mknodat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	const char *p = t.is_root ? "." : t.path;
 	long rv = TAWC_RAW(TAWC_SYS_mknodat, t.fd, (long)p,
 			   args->c, args->d, 0, 0);
+	if (!rv && tawcroot_owners_on()) tawcroot_owners_created_at(t.fd, p);
 	unsigned int ifmt = mode & S_IFMT;
 	if ((rv != TAWC_EPERM && rv != TAWC_EACCES) ||
 	    (ifmt != S_IFCHR && ifmt != S_IFBLK) ||
@@ -1360,6 +1376,7 @@ static long handle_mknodat(const tawcroot_syscall_args *args, ucontext_t *uc)
 			   O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
 			   mode & 07777, 0, 0);
 	if (fd >= 0) {
+		if (tawcroot_owners_on()) tawcroot_owners_created_fd((int)fd);
 		TAWC_RAW(TAWC_SYS_close, fd, 0, 0, 0, 0, 0);
 		return 0;
 	}
@@ -1502,7 +1519,10 @@ static long handle_unlinkat(const tawcroot_syscall_args *args, ucontext_t *uc)
 			return rv;
 		}
 	}
+	struct tawcroot_owner_key gone;
+	int dies = tawcroot_owners_on() && tawcroot_owners_doomed(t.fd, t.path, &gone);
 	long rv = TAWC_RAW(TAWC_SYS_unlinkat, t.fd, (long)t.path, flag, 0, 0, 0);
+	if (!rv && dies) tawcroot_owners_forget(&gone);
 	tawcroot_pathcache_mutated(t.fd, t.path);
 	return rv;
 }
@@ -1593,13 +1613,15 @@ static long handle_fchownat(const tawcroot_syscall_args *args, ucontext_t *uc)
 		if (empty < 0) return empty;
 		if (empty) {
 			if (tawcroot_fd_is_reserved(dirfd)) return TAWC_EBADF;
-			if (!priv)
+			if (!priv && !tawcroot_owners_on())
 				return TAWC_RAW(TAWC_SYS_fchownat, dirfd,
 						(long)"", args->c, args->d,
 						flags, 0);
 			struct stat probe;
 			long rv = TAWC_RAW(TAWC_SYS_fstatat, dirfd, (long)"",
 					   (long)&probe, AT_EMPTY_PATH, 0, 0);
+			if (rv == 0 && tawcroot_owners_on())
+				return tawcroot_owners_chown(&probe, (uint32_t)args->c, (uint32_t)args->d);
 			return rv < 0 ? rv : 0;
 		}
 	}
@@ -1632,12 +1654,14 @@ static long handle_fchownat(const tawcroot_syscall_args *args, ucontext_t *uc)
 			if (rv != TAWC_ENOENT) return rv;
 		}
 	}
-	if (!priv)
+	if (!priv && !tawcroot_owners_on())
 		return TAWC_RAW(TAWC_SYS_fchownat, t.fd, (long)p,
 				args->c, args->d, sflags, 0);
 	struct stat probe;
 	long rv = TAWC_RAW(TAWC_SYS_fstatat, t.fd, (long)p,
 			   (long)&probe, sflags, 0, 0);
+	if (rv == 0 && tawcroot_owners_on())
+		return tawcroot_owners_chown(&probe, (uint32_t)args->c, (uint32_t)args->d);
 	return rv < 0 ? rv : 0;  /* exists → fake-root no-op */
 }
 
@@ -1678,6 +1702,11 @@ static long handle_fchown(const tawcroot_syscall_args *args, ucontext_t *uc)
 	 * gets EROFS), and the forwarding branch must not write through
 	 * the host-RW bind src. */
 	if (fd_in_ro_bind(fd, 1)) return TAWC_EROFS;
+	if (tawcroot_owners_on()) {
+		struct stat st;
+		long rv = TAWC_RAW(TAWC_SYS_fstat, fd, (long)&st, 0, 0, 0, 0);
+		return rv ? rv : tawcroot_owners_chown(&st, (uint32_t)args->b, (uint32_t)args->c);
+	}
 	if (tawcroot_identity_euid() != 0)
 		return TAWC_RAW(TAWC_SYS_fchown, fd, args->b, args->c,
 				0, 0, 0);
@@ -1721,8 +1750,10 @@ static long handle_symlinkat(const tawcroot_syscall_args *args,
 			      TAWCROOT_PATH_INTENT_WRITE, &t);
 	if (e) return e;
 	if (t.is_root) return TAWC_EINVAL; /* can't create / */
-	return TAWC_RAW(TAWC_SYS_symlinkat, (long)tgt, t.fd,
-			(long)t.path, 0, 0, 0);
+	long rv = TAWC_RAW(TAWC_SYS_symlinkat, (long)tgt, t.fd,
+			   (long)t.path, 0, 0, 0);
+	if (!rv && tawcroot_owners_on()) tawcroot_owners_created_at(t.fd, t.path);
+	return rv;
 }
 
 /* statx with fake-root decoration. Layout differs from `struct stat`
@@ -1850,7 +1881,9 @@ static long finish_statx(long rv, struct statx *local,
 			 struct statx *guest_out)
 {
 	if (rv != 0) return rv;
-	if (tawcroot_identity_euid() == 0 || (local->stx_mode & 06000)) {
+	if (tawcroot_owners_on()) {
+		tawcroot_owners_statx(local);
+	} else if (tawcroot_identity_euid() == 0 || (local->stx_mode & 06000)) {
 		local->stx_uid = 0;
 		local->stx_gid = 0;
 	}
@@ -1863,7 +1896,9 @@ static long finish_statx(long rv, struct statx *local,
 static long finish_statx_direct(long rv, struct statx *guest_out)
 {
 	if (rv != 0) return rv;
-	if (tawcroot_identity_euid() == 0 || (guest_out->stx_mode & 06000)) {
+	if (tawcroot_owners_on()) {
+		tawcroot_owners_statx(guest_out);
+	} else if (tawcroot_identity_euid() == 0 || (guest_out->stx_mode & 06000)) {
 		guest_out->stx_uid = 0;
 		guest_out->stx_gid = 0;
 	}
@@ -2629,8 +2664,17 @@ static long do_renameat(int olddirfd, const char *oldpath,
 			 * clobbered object leaks (overcount, safe). */
 		}
 	}
+	/* --owners: a replaced target's inode dies (unless it is the
+	 * source itself, which rename leaves alone). */
+	struct tawcroot_owner_key gone, src;
+	int dies = tawcroot_owners_on() && !(rflags & RENAME_EXCHANGE) &&
+		tawcroot_owners_doomed(tnew.fd, tnew.path, &gone);
+	if (dies && tawcroot_owners_doomed(told.fd, told.path, &src) &&
+	    src.dev == gone.dev && src.ino == gone.ino)
+		dies = 0;
 	long rv = TAWC_RAW(TAWC_SYS_renameat2, told.fd, (long)told.path,
 			   tnew.fd, (long)tnew.path, rflags, 0);
+	if (!rv && dies) tawcroot_owners_forget(&gone);
 	rename_mutated(&told, &tnew);
 	return rv;
 }

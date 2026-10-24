@@ -14,6 +14,7 @@ struct tawc_namespace {
 #define TAWC_NS_CG_WRITE_TRAP 4u /* write() on fds >= the reserved floor traps */
 #define TAWC_NS_EPOLL_TRAP 8u
 #define TAWC_NS_RECV_TRAP 16u     /* recv* on fds >= the floor trap (ports.c) */    /* epoll_ctl() on fds >= the floor traps (mounts.c) */
+#define TAWC_NS_OWNERS 32u        /* --owners: persistent file ownership (owners.h) */
 extern struct tawc_namespace tawcroot_namespace;
 void tawcroot_namespace_register(void);
 void tawcroot_namespace_restore(void);

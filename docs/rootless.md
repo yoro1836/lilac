@@ -46,7 +46,7 @@ VineOS app process (app uid)
 │       draws into the VMDisplayScreen Surface, feeds touch/keys
 └─ libvine_helper.so --rootless                      (same line protocol, no su)
      ├─ binderd (one per instance): binder / hwbinder / vndbinder
-     └─ tawcroot --init --cgroup -r <rootfs> … -- /init
+     └─ tawcroot --init --cgroup --owners -r <rootfs> … -- /init
           └─ servicemanager, hwservicemanager, surfaceflinger,
              composer HAL (hwcomposer.waydroid) ──► wayland-0
              zygote64 → system_server → apps, vine agent
@@ -75,7 +75,8 @@ is a second implementation behind the same tab-separated protocol
 | `scripts/waydroid_to_vrom.py` | Waydroid OTA zips → `.vrom` (system.img + vendor.img, no ramdisk) |
 
 tawcroot also gets the Android device and `/proc`/`/sys` emulation, a
-nested-seccomp no-op for zygote, and an ownership store (see risks).
+nested-seccomp no-op for zygote. The ownership store is done (`--owners`,
+below).
 
 Gradle runs `tawcroot/build.sh` (NDK) from `preBuild` and packages
 `libtawcroot.so` (later `libbinderd.so`) as jniLibs, the same extractor
@@ -125,6 +126,28 @@ to `/dev/binderfs` (`-b <dir>:/dev/binderfs`); it holds the `binder`,
   `waydroidplatform`), and running real libbinder (servicemanager) on a
   device.
 
+## Ownership store
+
+`tawcroot --owners` (`tawcroot/src/owners.c`, layout in
+`tawcroot/include/owners_table.h`). The host app uid owns every file, so
+without it a guest that switches uids sees no ownership at all.
+
+- `<store>/owners` (the store is `<rootfs>/../tawcroot`) is a 24 MiB sparse
+  open-addressing table, (st_dev, st_ino) → (uid, gid), mapped shared by
+  every guest process. stat reads it without a syscall; writers flock it.
+- No entry means root:root. Files a non-root guest creates (open O_CREAT,
+  mkdir, mknod, symlink) belong to its fsuid/fsgid. chown follows the
+  kernel's rules for the virtual identity: any change at euid 0, otherwise
+  only the owner changing the group to one of its own.
+- Removing an inode's last name (unlink, rmdir, rename over it) drops its
+  entry, so a reused inode number starts as root again.
+- A session flag (`TAWC_NS_OWNERS`): inherited across fork and exec, off by
+  default (TAWC-style distro sessions keep today's behaviour).
+- Not done: setgid-directory group inheritance, permission checks (see
+  risks), table growth past 786k live entries (writes then fail with
+  ENOSPC and the files read as root).
+- Test: `tawcroot/test.sh --host 'prod_owners.*'`.
+
 ## ROMs
 
 One `.vrom` serves both engines: the root engine loop-mounts the images,
@@ -135,7 +158,8 @@ rootfs directory, with a per-instance writable `data` dir.
 - The root engine needs system-as-root support (it currently requires
   `ramdisk.img`, `container/namespace_manager.cpp:593`).
 - The extractor is read-only ext4 (extents, linear and htree directories,
-  fast/slow symlinks, mode/uid/gid). Ownership goes into the ownership store.
+  fast/slow symlinks, mode/uid/gid). Non-root owners go straight into the
+  ownership table (`tawcroot/include/owners_table.h`).
 
 ## ROM builds
 
@@ -151,7 +175,7 @@ does it. Keep a snapshot only while iterating often.
    `/proc/cmdline`, `<instance>/data`, `<instance>/run/`.
 2. The app starts the compositor on `<instance>/run/wayland-0`.
 3. The helper starts binderd, then
-   `tawcroot --init --cgroup -r <rootfs> -b <instance>/data:/data -b <instance>/run:/run/user/1000 -- /init`.
+   `tawcroot --init --cgroup --owners -r <rootfs> -b <instance>/data:/data -b <instance>/run:/run/user/1000 -- /init`.
 4. The vine agent reports boot completion, apps, icons, as on the root path.
 
 ## Milestones
@@ -171,9 +195,11 @@ does it. Keep a snapshot only while iterating often.
   32, system-wide. A booted guest runs 60+. Likely needs the user to turn
   it off (12L+: `adb shell settings put global settings_enable_monitor_phantom_procs false`).
   Blocking for real use.
-- **File ownership**: tawcroot reports files as root-owned and has no
-  per-file uid store. Android relies on per-uid ownership (`/data/data/<pkg>`
-  owned by the app uid, `system` files), so tawcroot needs an ownership store.
+- **File ownership**: done for stat/chown (`--owners`), but permission
+  checks are not emulated: the kernel sees the app uid on every file, so an
+  app uid can read another app's 0700 files. Nothing in Android's boot
+  should depend on being denied; app isolation inside the guest is not a
+  security boundary.
 - Binder cost: every call is SIGSYS + socket round trips + two copies.
   Fallback: patch libbinder in our ROM to talk to binderd directly.
 - Networking: no netns rootless, and ConnectivityService wants a

@@ -47,6 +47,7 @@ static_cgroup_check
 static_mount_check
 static_net_check
 static_binder_check
+static_owner_check
 binderd
 dynamic_exit42
 dynamic_argv_check

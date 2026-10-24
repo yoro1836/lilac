@@ -46,6 +46,7 @@
 #include "sysnr.h"
 #include "linkstore.h"
 #include "namespace.h"
+#include "owners.h"
 #include "cgroup.h"
 #include "mounts.h"
 #include "uts.h"
@@ -222,7 +223,7 @@ static __attribute__((noreturn)) void usage(int code)
 	            "  tawcroot-testhost -r ROOTFS [-b SRC:DST[:ro]]...\n");
 #else
 	tawc_io_str("tawcroot: usage:\n"
-	            "  tawcroot -r ROOTFS [--host-user] [--init] [--cgroup] [-b SRC:DST[:ro]]... -- CMD [ARGS...]\n"
+	            "  tawcroot -r ROOTFS [--host-user] [--init] [--cgroup] [--owners] [-b SRC:DST[:ro]]... -- CMD [ARGS...]\n"
 	            "  tawcroot --exec-child <fd>\n");
 #endif
 	tawc_exit_group(code);
@@ -470,6 +471,7 @@ __attribute__((noreturn)) static void prod_main(int argc, char **argv)
 	int         host_user = 0;
 	int         init      = 0;
 	int         cgroup    = 0;
+	int         owners    = 0;
 
 	int i = 1;
 	while (i < argc) {
@@ -486,6 +488,9 @@ __attribute__((noreturn)) static void prod_main(int argc, char **argv)
 			i++;
 		} else if (tawc_streq(argv[i], "--cgroup")) {
 			cgroup = 1;
+			i++;
+		} else if (tawc_streq(argv[i], "--owners")) {
+			owners = 1;
 			i++;
 		} else if (tawc_streq(argv[i], "-b")) {
 			if (i + 1 >= argc) usage(2);
@@ -517,6 +522,10 @@ __attribute__((noreturn)) static void prod_main(int argc, char **argv)
 	if (init) (void)tawcroot_mounts_setup();
 	if (init) tawcroot_uts_setup();
 	if (init) tawcroot_namespace_ids_setup();
+	if (owners && tawcroot_owners_setup() < 0) {
+		tawc_io_str("tawcroot: --owners needs a store dir (<rootfs>/../tawcroot)\n");
+		tawc_exit_group(96);
+	}
 	if (host_user) {
 		tawc_identity id = { 0 };
 		id.ruid = id.euid = id.suid = id.fsuid = (uint32_t)tawc_getuid();

@@ -166,6 +166,7 @@ PROD_C := \
     $(SRC_T)/src/syscalls_fd.c \
     $(SRC_T)/src/gamepad.c \
     $(SRC_T)/src/binder.c \
+    $(SRC_T)/src/owners.c \
     $(SRC_T)/src/linkstore.c \
     $(SRC_T)/src/dirent_filter.c \
     $(SRC_T)/src/syscalls_control.c \
@@ -351,6 +352,12 @@ $(OUT)/programs/static_net_check: $(SRC_TS)/integration/programs/static_net_chec
 # static_binder_check: static C (libc.a) — two processes over the
 # emulated /dev/binder. See the source for exit codes.
 $(OUT)/programs/static_binder_check: $(SRC_TS)/integration/programs/static_binder_check.c | $(OUT)
+	@mkdir -p $(dir $@)
+	$(CC) -O2 -static -Wl,--build-id=none $< -o $@
+
+# static_owner_check: static C (libc.a) — `--owners` persistent file
+# ownership. See the source for exit codes.
+$(OUT)/programs/static_owner_check: $(SRC_TS)/integration/programs/static_owner_check.c | $(OUT)
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -static -Wl,--build-id=none $< -o $@
 

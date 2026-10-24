@@ -213,7 +213,9 @@ foreclose future expansion.
   the handler comment in `syscalls_socket.c`), `stat`-family
   results are decorated to look root-owned where appropriate, and
   ownership-changing syscalls are treated as compatibility
-  operations rather than real privilege changes. We
+  operations rather than real privilege changes (with `--owners`, stat
+  and chown use a persistent ownership table instead, see
+  docs/rootless.md "Ownership store"). We
   do **not** provide pid namespaces, mount namespaces, user
   namespace semantics, or a general-purpose privilege model.
 
