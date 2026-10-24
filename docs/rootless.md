@@ -188,9 +188,10 @@ does it. Keep a snapshot only while iterating often.
 3. ~~Compositor in the app, surfaceflinger + composer HAL → first
    frame.~~ Done: `vine_wl` serves Waydroid's hwcomposer, the guest boots
    to its lock screen ([rootless-boot.md](rootless-boot.md)).
-4. system_server, launcher, input; freeze the ROM patch list. Started:
-   system_server and apps run, SystemUI and watchdog stability and input
-   remain.
+4. system_server, launcher, input; freeze the ROM patch list. Mostly
+   there: system_server, SystemUI and the launcher run and injected touch
+   and keys work; binderd stability remains. No ROM patches so far, only
+   rootfs preparation ([rootless-boot.md](rootless-boot.md)).
 5. Rootless engine behind the helper protocol, `.vrom` extraction, UI switch.
 6. Own 64-bit-only ROM build if milestone 4 needs patches.
 

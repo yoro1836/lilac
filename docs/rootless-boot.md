@@ -5,13 +5,13 @@ enforcing), app uid via `run-as`, `scripts/rootless/boot-init.sh`.
 
 ## Where it is
 
-The guest boots to its lock screen. init runs the whole boot sequence,
-zygote forks system_server, SurfaceFlinger composes in software (ANGLE on
-lavapipe) and Waydroid's hwcomposer posts each frame as a `wl_shm` buffer
-to `vine_wl`, which writes it into `w/vinefb`. system_server sends
-LOCKED_BOOT_COMPLETED and BOOT_COMPLETED, apps start (launcher, settings,
-provision, providers) and SystemUI draws the keyguard, status and
-navigation bars. Not stable yet, see the gaps below.
+The guest boots to its lock screen and is usable through injected
+input: a swipe unlocks to the launcher, taps open apps (Settings), HOME
+and BACK work, and text typed into a search field arrives. init runs
+the whole boot sequence, zygote forks system_server, SurfaceFlinger
+composes in software (ANGLE on lavapipe) and Waydroid's hwcomposer
+posts each frame as a `wl_shm` buffer to `vine_wl`, which writes it into
+`w/vinefb`. Not stable yet, see the gaps below.
 
 ## Display path
 
@@ -111,15 +111,16 @@ What the engine must do to an extracted image, done today by
 
 ## Known gaps, next
 
-- SystemUI crashes on its first starts (`AppOpsControllerImpl.setListening`
-  iterates a null list, likely an audio recording query) before a later
-  restart sticks.
+- binderd now and then segfaults; every guest's binder then fails with
+  EIO and the boot falls apart (system_server dies on a missing
+  service, watchdogs fire). Being hunted with `BINDERD_WRAP=bin/faultcatch`.
 - Now and then system_server's watchdog fires with ActivityManager's lock
   held by a binder thread in a oneway `scheduleStopService` that never
-  completes (after an app death). Not understood yet; binderd's SIGUSR1
-  state dump is the starting point.
-- No input yet (wl_seat has no capabilities); the app shows vinefb but
-  does not forward touches.
+  completes (after an app death). Possibly the same binderd fault;
+  binderd's SIGUSR1 state dump is the starting point.
+- The app does not forward its touches yet: that waits for the rootless
+  engine behind the helper protocol (milestone 5), whose `agent_send`
+  can pass the lines on to `vine_wl --input`.
 - Some Waydroid vendor HALs are 32-bit only (camera, cas, media.omx): no
   camera on 64-bit-only hosts without a rebuild.
 - mdnsd aborts on `FD_SET` with fd 1056+: guest-visible fds at or above
