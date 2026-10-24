@@ -180,6 +180,42 @@ test(prod_binder_last_ref_dies)
 #endif
 }
 
+/* A oneway call's buffer keeps its target node alive until it is freed,
+ * even after the last ref to the node is gone. */
+test(prod_binder_async_buffer_keeps_node)
+{
+#if defined(__ANDROID__)
+	printf("    skipping (host-only, see prod_binder_transactions)\n");
+	return;
+#else
+	rh_rmrf(BINDER_ROOTFS);
+	rh_rmrf(BINDER_DIR);
+	test_true(build_binder_rootfs());
+	test_true(rh_mkdir_p(BINDER_DIR, 0755));
+	pid_t binderd = start_binderd();
+	test_true(binderd > 0);
+	test_true(rh_poll_for_path(BINDER_DIR "/ready", 100));
+	VecStr cmd = c_init(vec_str, {
+		TAWCROOT_PROD_BIN, "-r", BINDER_ROOTFS,
+		"-b", BINDER_DIR ":/dev/binderfs",
+		"--", "/bin/static_binder_check", "asyncref",
+	});
+	int rc = -1;
+	FailableResult res = run_subproc((SubprocArgs){ .vec_cmd = cmd, .exit_code = &rc });
+	failable_result_drop(&res);
+	int alive = waitpid(binderd, 0, WNOHANG) == 0;
+	kill(binderd, SIGTERM);
+	int status = 0;
+	waitpid(binderd, &status, 0);
+	test_int_eq(rc, 42);
+	test_true(alive);
+	test_true(WIFEXITED(status));
+	test_int_eq(WEXITSTATUS(status), 0);
+	rh_rmrf(BINDER_ROOTFS);
+	rh_rmrf(BINDER_DIR);
+#endif
+}
+
 /* A vfork child shares the shim's tables: its close of the binder fd
  * must not tear down the parent's binder. */
 test(prod_binder_vfork_child_close)

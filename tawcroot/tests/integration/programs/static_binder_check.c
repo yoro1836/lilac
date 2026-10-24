@@ -23,6 +23,11 @@
  * read. Dropping that ref wakes the parent mid-release; it must get
  * BR_RELEASE and BR_DECREFS, and binderd must not touch the node after.
  *
+ * `static_binder_check asyncref`: as dropref, but the child also sends
+ * a oneway call to the node before dying, and the parent frees that
+ * buffer only once BR_RELEASE arrives: the buffer must keep the node
+ * alive (binderd freed it with BR_DECREFS and then touched it).
+ *
  * `static_binder_check vfork`: a vfork child closes the binder fd (as
  * ART's Runtime.exec child closes every fd); the parent's binder must
  * keep working.
@@ -40,6 +45,7 @@
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -350,6 +356,89 @@ static int dropref_parent(void)
 	return 42;
 }
 
+static int asyncref_child(void)
+{
+	struct conn c;
+	open_binder(&c, 71);
+	send_txn(&c, BC_TRANSACTION, 0, 1, 0, "give", 5, NULL, 0, 0);
+	talk(&c, 1, 72);
+	struct binder_transaction_data tr;
+	uint32_t cmd;
+	while ((cmd = next_real(&c, &tr, 73)) == BR_TRANSACTION_COMPLETE) {}
+	if (cmd != BR_REPLY || tr.offsets_size != 8) FAIL(73);
+	struct flat_binder_object fo;
+	memcpy(&fo, (const void *)(uintptr_t)tr.data.ptr.buffer, sizeof fo);
+	if (fo.hdr.type != BINDER_TYPE_HANDLE) FAIL(74);
+	put32(&c, BC_INCREFS);
+	put32(&c, fo.handle);
+	put32(&c, BC_ACQUIRE);
+	put32(&c, fo.handle);
+	free_buf(&c, tr.data.ptr.buffer);
+	send_txn(&c, BC_TRANSACTION, fo.handle, 2, TF_ONE_WAY, "note", 5, NULL, 0, 0);
+	talk(&c, 0, 75);
+	usleep(200 * 1000);
+	return 42;
+}
+
+static int asyncref_parent(void)
+{
+	struct conn c;
+	open_binder(&c, 1);
+	if (ioctl(c.fd, BINDER_SET_CONTEXT_MGR, &(int){0}) < 0) FAIL(2);
+	pid_t pid = fork();
+	if (pid < 0) FAIL(3);
+	if (pid == 0) _exit(asyncref_child());
+	alarm(20);
+	put32(&c, BC_ENTER_LOOPER);
+	talk(&c, 1, 4);
+	struct binder_transaction_data tr;
+	uint32_t cmd;
+	while ((cmd = next_real(&c, &tr, 5)) == BR_TRANSACTION_COMPLETE) {}
+	if (cmd != BR_TRANSACTION || tr.code != 1) FAIL(5);
+	free_buf(&c, tr.data.ptr.buffer);
+	struct flat_binder_object node = { .hdr.type = BINDER_TYPE_BINDER, .binder = 0xF0, .cookie = 0xF1 };
+	uint64_t offs[1] = { 0 };
+	send_txn(&c, BC_REPLY, 0, 0, 0, &node, sizeof node, offs, 1, 0);
+	talk(&c, 0, 6);
+	int released = 0, decref = 0, oneway = 0;
+	uint64_t held = 0;
+	while (!released || !decref || held || !oneway) {
+		uint8_t buf[sizeof(struct binder_transaction_data_secctx)];
+		cmd = next_cmd(&c, buf, 7);
+		if (cmd == BR_INCREFS || cmd == BR_ACQUIRE) {
+			struct binder_ptr_cookie pc;
+			memcpy(&pc, buf, sizeof pc);
+			put32(&c, cmd == BR_INCREFS ? BC_INCREFS_DONE : BC_ACQUIRE_DONE);
+			putbytes(&c, &pc, sizeof pc);
+			talk(&c, 0, 8);
+		} else if (cmd == BR_TRANSACTION) {
+			memcpy(&tr, buf, sizeof tr);
+			if (tr.code != 2 || !(tr.flags & TF_ONE_WAY) || tr.target.ptr != 0xF0) FAIL(9);
+			held = tr.data.ptr.buffer;
+			oneway = 1;
+		} else if (cmd == BR_RELEASE || cmd == BR_DECREFS) {
+			if (cmd == BR_RELEASE) released = 1;
+			else decref = 1;
+		} else if (cmd != BR_NOOP && cmd != BR_TRANSACTION_COMPLETE && cmd != BR_SPAWN_LOOPER) {
+			FAIL(10);
+		}
+		/* Free it as late as possible: after BR_DECREFS if that comes
+		 * at all while the buffer is held (it must not: the buffer
+		 * keeps the node), else once nothing more arrives. */
+		if (released && held && c.in_pos >= c.in_len) {
+			struct pollfd pf = { .fd = c.fd, .events = POLLIN };
+			if (decref || poll(&pf, 1, 300) == 0) {
+				free_buf(&c, held);
+				talk(&c, 0, 11);
+				held = 0;
+			}
+		}
+	}
+	int status = 0;
+	if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 42) FAIL(12);
+	return 42;
+}
+
 static int vfork_close(void)
 {
 	struct conn c;
@@ -375,6 +464,7 @@ int main(int argc, char **argv)
 	if (argc == 3 && !strcmp(argv[1], "dead")) return dead_parent(argv[2]);
 	if (argc == 2 && !strcmp(argv[1], "dropref")) return dropref_parent();
 	if (argc == 2 && !strcmp(argv[1], "vfork")) return vfork_close();
+	if (argc == 2 && !strcmp(argv[1], "asyncref")) return asyncref_parent();
 	struct conn c;
 	open_binder(&c, 1);
 	struct flat_binder_object mgr = {

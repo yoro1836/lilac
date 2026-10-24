@@ -548,7 +548,12 @@ static void free_buffer(struct proc *p, struct buffer *b)
 	(void)p;
 	if (b->txn) b->txn->buf = NULL;
 	list_del(&b->entry);
+	struct node *n = b->target_node;
 	free(b);
+	if (n) {
+		n->tmp_refs--;
+		dec_node(n, false, true);
+	}
 }
 
 static struct buffer *find_buffer(struct proc *p, uint64_t guest_addr)
@@ -876,7 +881,11 @@ static void handle_transaction(struct thread *th, const struct binder_transactio
 	if (!b) { err = BR_FAILED_REPLY; goto fail; }
 	b->data_size = sec.data_size;
 	b->offsets_size = sec.offsets_size;
+	/* The buffer keeps its target node alive until it is freed, as the
+	 * kernel's ref on buffer->target_node does: BC_FREE_BUFFER of a
+	 * oneway call and the delivery itself both look at the node. */
 	b->target_node = target_node;
+	if (target_node) target_node->tmp_refs++;
 	b->async = !is_reply && (tr->flags & TF_ONE_WAY);
 
 	struct txn *t = xcalloc(1, sizeof *t);
