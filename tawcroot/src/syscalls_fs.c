@@ -39,6 +39,7 @@
 #include "uts.h"
 #include "dispatch.h"
 #include "errno_neg.h"
+#include "binder.h"
 #include "gamepad.h"
 #include "fdtab.h"
 #include "identity.h"
@@ -276,6 +277,8 @@ static long handle_openat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	if (fe) return fe;
 	long gamepad = tawcroot_gamepad_open(dirfd, path, flags);
 	if (gamepad != TAWC_ENOSYS) return gamepad;
+	long binder = tawcroot_binder_open(dirfd, path, flags);
+	if (binder != TAWC_ENOSYS) return binder;
 	long nsfd = tawcroot_namespace_open(path, flags);
 	if (nsfd != TAWC_ENOSYS) return nsfd;
 	if (tawcroot_namespace.init_pid) {

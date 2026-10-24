@@ -8,6 +8,7 @@
 
 #include <stddef.h>
 
+#include "binder.h"
 #include "chroot.h"
 #include "dispatch.h"
 #include "errno_neg.h"
@@ -89,6 +90,7 @@ void tawcroot_dispatch_init(void)
 	tawcroot_namespace_register();
 	tawcroot_sysv_sem_register();
 	tawcroot_sysv_shm_register();
+	tawcroot_binder_register();
 }
 
 size_t tawcroot_dispatch_trap_list(int *out, size_t out_cap)

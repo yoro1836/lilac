@@ -103,6 +103,13 @@ build_dynamic_big_stack() {
 }
 
 # --- androidfilter wrap (host-bionic helper used by handler/test_androidfilter.c) ---
+build_binderd() {
+    local out="$OUT_DIR/binderd"
+    "$CC" -O2 -Wall -Wextra -Werror -I"$TAWCROOT_DIR/include" -Wl,--build-id=none \
+        "$TAWCROOT_DIR/binderd/binderd.c" -o "$out"
+    echo "  built binderd"
+}
+
 build_wrap() {
     local out="$OUT_DIR/wrap"
     "$CC" -O2 -Wall -Wextra -Werror -Wl,--build-id=none "$WRAP_SRC" -o "$out"
@@ -145,6 +152,8 @@ build_static_c static_init_check
 build_static_c static_cgroup_check
 build_static_c static_mount_check
 build_static_c static_net_check
+build_static_c static_binder_check
+build_binderd
 build_dynamic dynamic_exit42
 build_dynamic dynamic_argv_check
 build_dynamic dynamic_legacy_nr_probe

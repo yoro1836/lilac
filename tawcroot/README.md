@@ -18,6 +18,8 @@ Layout:
                                     tawcroot + testhost + fixtures to a device
                                     and runs it there (`--device`)
 - `perf/`                         — micro-benchmark harness comparing backends
+- `binderd/`                      — userspace binder driver for Android guests
+                                    (../docs/rootless.md "Binder emulation")
 
 Design + plan: ../docs/tawcroot/README.md
 

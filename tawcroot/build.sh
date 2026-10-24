@@ -50,6 +50,7 @@
 # Output:
 #   app/src/main/jniLibs/arm64-v8a/libtawcroot.so          (production)
 #   app/src/main/jniLibs/x86_64/libtawcroot.so             (production)
+#   app/src/main/jniLibs/<abi>/libbinderd.so                (binderd, see binderd/)
 #   build/tawcroot-host/tawcroot                                  (production, host)
 #   build/tawcroot-host/tawcroot-testhost                         (testhost, host)
 #   build/tawcroot-host/tests                                     (cleat orchestrator)
@@ -197,6 +198,7 @@ SRC_C_PROD=(
     "$TAWCROOT_DIR/src/syscalls_fs.c"
     "$TAWCROOT_DIR/src/syscalls_fd.c"
     "$TAWCROOT_DIR/src/gamepad.c"
+    "$TAWCROOT_DIR/src/binder.c"
     "$TAWCROOT_DIR/src/linkstore.c"
     "$TAWCROOT_DIR/src/dirent_filter.c"
     "$TAWCROOT_DIR/src/syscalls_control.c"
@@ -384,6 +386,27 @@ build_binary() {
     fi
 }
 
+# binderd, the userspace binder driver: an ordinary bionic executable the
+# app's helper starts next to the guests (it is not a guest itself).
+# Staged as libbinderd.so for the same jniLibs-extractor reason as
+# libtawcroot.so.
+build_binderd() {
+    local abi="$1" cc jni
+    case "$abi" in
+        aarch64) cc="$NDK_BIN/aarch64-linux-android29-clang"; jni=arm64-v8a ;;
+        x86_64)  cc="$NDK_BIN/x86_64-linux-android29-clang";  jni=x86_64 ;;
+    esac
+    local out="$BUILD_ROOT/tawcroot-$abi/binderd"
+    mkdir -p "$(dirname "$out")" "$JNILIBS_DIR/$jni"
+    "$cc" -std=gnu11 -O2 -Wall -Wextra -Werror -fPIE -pie \
+        -ffile-prefix-map="$REPO_DIR/=" -I"$TAWCROOT_DIR/include" \
+        -Wl,-z,max-page-size=16384 -Wl,--build-id=none \
+        "$TAWCROOT_DIR/binderd/binderd.c" -o "$out"
+    "$NDK_BIN/llvm-strip" "$out"
+    cp -f "$out" "$JNILIBS_DIR/$jni/libbinderd.so"
+    echo "    staged at jniLibs/$jni/libbinderd.so"
+}
+
 # Cross-compile the cleat-driven `tests` orchestrator binary for an Android
 # ABI. Mirrors tawcroot/Makefile's `tests` target but uses the NDK clang
 # against bionic instead of host gcc. Output lands at
@@ -540,12 +563,14 @@ case "$ABI" in
     aarch64)
         if [ "$CLEAN" = "1" ]; then rm -rf "$BUILD_ROOT/tawcroot-aarch64"; fi
         build_binary aarch64 prod
+        build_binderd aarch64
         if [ "$TESTHOST_FOR_NONHOST" = "1" ]; then build_binary aarch64 testhost; fi
         if [ "$TESTS_FOR_NONHOST"    = "1" ]; then build_tests  aarch64;        fi
         ;;
     x86_64)
         if [ "$CLEAN" = "1" ]; then rm -rf "$BUILD_ROOT/tawcroot-x86_64"; fi
         build_binary x86_64 prod
+        build_binderd x86_64
         if [ "$TESTHOST_FOR_NONHOST" = "1" ]; then build_binary x86_64 testhost; fi
         if [ "$TESTS_FOR_NONHOST"    = "1" ]; then build_tests  x86_64;        fi
         ;;
@@ -553,6 +578,8 @@ case "$ABI" in
         if [ "$CLEAN" = "1" ]; then rm -rf "$BUILD_ROOT/tawcroot-aarch64" "$BUILD_ROOT/tawcroot-x86_64"; fi
         build_binary aarch64 prod
         build_binary x86_64 prod
+        build_binderd aarch64
+        build_binderd x86_64
         if [ "$TESTHOST_FOR_NONHOST" = "1" ]; then
             build_binary aarch64 testhost
             build_binary x86_64 testhost

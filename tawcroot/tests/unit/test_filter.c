@@ -289,6 +289,41 @@ test(filter_close_with_reserved_fd_traps)
 		    SECCOMP_RET_ALLOW);
 }
 
+/* mmap traps only for fd-backed maps at or above the floor (emulated
+ * binder fds); anonymous maps (fd -1) and ordinary file maps run inline. */
+test(filter_mmap_traps_only_high_fds)
+{
+	int traps[] = { TAWC_SYS_mmap, TAWC_SYS_openat };
+	struct test_seccomp_data d = {
+		.nr = TAWC_SYS_mmap, .arch = TEST_AUDIT_ARCH,
+		.instruction_pointer = OUT_OF_STUB,
+		.args = { 0, 4096, 1, 1, 1000, 0 },
+	};
+	test_int_eq(build_and_run(traps, 2, STUB_ADDR, 1000,
+				  TEST_AUDIT_ARCH, &d),
+		    SECCOMP_RET_TRAP);
+	d.args[4] = 7;
+	test_int_eq(build_and_run(traps, 2, STUB_ADDR, 1000,
+				  TEST_AUDIT_ARCH, &d),
+		    SECCOMP_RET_ALLOW);
+	d.args[4] = (uint64_t)-1;
+	test_int_eq(build_and_run(traps, 2, STUB_ADDR, 1000,
+				  TEST_AUDIT_ARCH, &d),
+		    SECCOMP_RET_ALLOW);
+	/* tawcroot's own maps go through the stub. */
+	d.args[4] = 1000;
+	d.instruction_pointer = STUB_ADDR;
+	test_int_eq(build_and_run(traps, 2, STUB_ADDR, 1000,
+				  TEST_AUDIT_ARCH, &d),
+		    SECCOMP_RET_ALLOW);
+	/* The following trap still sees the NR, not args[4]. */
+	d.nr = TAWC_SYS_openat;
+	d.instruction_pointer = OUT_OF_STUB;
+	test_int_eq(build_and_run(traps, 2, STUB_ADDR, 1000,
+				  TEST_AUDIT_ARCH, &d),
+		    SECCOMP_RET_TRAP);
+}
+
 test(filter_close_block_does_not_eat_following_traps)
 {
 	/* The not-close jf skip must land AFTER the close block's tail

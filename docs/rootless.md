@@ -84,29 +84,46 @@ and `x86_64`, so the rootless engine is unavailable on the 32-bit ABIs.
 
 ## Binder emulation
 
-- Guest `open("/dev/{binder,hwbinder,vndbinder}")` returns a **memfd** (the
-  receive buffer, so the guest's untrapped `mmap` just works) duplicated to
-  fd ≥ 1000 so its `close` traps. The handler keeps a side table:
-  binder fd → binderd process connection (reserved fd), RW alias mapping.
-- `ioctl` on a binder fd goes over AF_UNIX `SOCK_SEQPACKET`: one process
-  connection, plus one lazily opened connection per thread (binder state is
-  per-thread). FDs in transactions travel via `SCM_RIGHTS`; the receiving
-  handler installs them and patches the buffer through its alias.
-- binderd writes payloads straight into the receiver's memfd. The guest
-  mapping base/size is found once from `/proc/self/maps` and sent to binderd.
-- Blocking reads wait on {thread socket, signalfd(guest unblocked mask)}; a
-  pending guest signal returns `-EINTR` with `write_consumed` updated
-  (libbinder's `talkWithDriver` retries). Same idea as `tawcroot/src/sysv_sem.c`.
-- Sender pid/uid come in-band from tawcroot's virtual identity and pid
-  emulation, not `SO_PEERCRED`.
-- Scope: BC/BR core set, refcount protocol (INCREFS/ACQUIRE/…), death
-  notifications, objects BINDER/HANDLE/FD/FDA/PTR (scatter-gather for HIDL),
-  `SET_CONTEXT_MGR_EXT`, `TRANSACTION_SG`, A13 ioctls (`FREEZE`,
-  `GET_EXTENDED_ERROR`, …), binderfs `features/` files.
-- binderd has a host API, so the helper can register the services
-  Waydroid's host normally provides (`waydroidclipboard`, `waydroidhardware`,
-  `waydroidnotifications`, `waydroidusermonitor`) and call the guest's
-  `waydroidplatform`.
+Implemented (milestone 1): `tawcroot/binderd/binderd.c` (the driver),
+`tawcroot/src/binder.c` (the in-handler shim), wire protocol in
+`tawcroot/include/binder_wire.h`. Enabled by binding binderd's directory
+to `/dev/binderfs` (`-b <dir>:/dev/binderfs`); it holds the `binder`,
+`hwbinder` and `vndbinder` sockets and the `features/` files libbinder reads.
+
+- `open("/dev/{binder,hwbinder,vndbinder}")` (or `/dev/binderfs/<name>`)
+  connects to binderd. The guest's binder fd **is** that SOCK_SEQPACKET
+  process connection, at fd ≥ 1000, so poll/epoll on it works (binderd
+  keeps a `BW_POLL` byte queued while the process has work) and its
+  `close` traps.
+- `mmap` of fds ≥ 1000 traps (a new seccomp leaf; anonymous maps and
+  ordinary files stay inline). For a binder fd it maps the receive buffer
+  memfd read-only and shared; binderd writes transactions straight into it.
+- Each guest thread gets its own connection and a staging memfd shared with
+  binderd, which carries requests (BC bytes, then per transaction its data,
+  offsets and PTR buffers) and responses (BR bytes, fd fixups). Fds travel
+  via `SCM_RIGHTS` and land CLOEXEC, as the kernel installs them.
+- A blocked read waits on {thread socket, signalfd(guest's unblocked
+  signals)}. A pending signal sends `BW_CANCEL`; the ioctl returns `-EINTR`
+  with `write_consumed` set, and libbinder's `talkWithDriver` retries.
+- Sender pid/euid come in-band from tawcroot's identity and `--init` pid
+  emulation.
+- binderd follows `drivers/android/binder.c`: node/ref refcounting with
+  BR_INCREFS/ACQUIRE/RELEASE/DECREFS, deferred TRANSACTION_COMPLETE for sync
+  calls, nested-call routing through transaction stacks, per-node oneway
+  queues, death notifications, BINDER/HANDLE/FD/FDA/PTR objects,
+  `BR_TRANSACTION_SEC_CTX` (`--secctx`, default `u:r:untrusted_app:s0`),
+  BR_SPAWN_LOOPER, `SET_CONTEXT_MGR(_EXT)`, `GET_NODE_INFO_FOR_REF`,
+  `GET_NODE_DEBUG_INFO`, `GET_EXTENDED_ERROR`.
+- Not implemented: priority inheritance, freezing (`BINDER_FREEZE` is
+  `-EINVAL`), oneway spam detection, async space accounting.
+- Tests: `tawcroot/test.sh --host 'prod_binder.*'` runs two guest processes
+  (`tests/integration/programs/static_binder_check.c`) against an
+  ASan/UBSan binderd: secctx, epoll, oneway scatter-gather with an FDA, fd
+  passing, binder→handle translation, nested calls, death notification, and
+  the manager dying mid nested call.
+- To do: the helper's host API (register the `waydroid*` services, call
+  `waydroidplatform`), and running real libbinder (servicemanager) on a
+  device.
 
 ## ROMs
 
@@ -139,8 +156,8 @@ does it. Keep a snapshot only while iterating often.
 
 ## Milestones
 
-1. binderd + tawcroot shim, host tests: transaction/reply,
-   refcounts, fd passing, death notification, scatter-gather.
+1. ~~binderd + tawcroot shim, host tests: transaction/reply,
+   refcounts, fd passing, death notification, scatter-gather.~~ Done.
 2. On device: servicemanager + hwservicemanager + `service list` under
    tawcroot.
 3. Compositor in the app, surfaceflinger + composer HAL → first frame.

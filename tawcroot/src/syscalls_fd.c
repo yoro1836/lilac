@@ -21,6 +21,7 @@
 #include "dirent_filter.h"
 #include "dispatch.h"
 #include "errno_neg.h"
+#include "binder.h"
 #include "gamepad.h"
 #include "fdtab.h"
 #include "io.h"
@@ -122,8 +123,10 @@ static long handle_close(const tawcroot_syscall_args *args, ucontext_t *uc)
 	 * which is a superset of the table (the guest's own high fds land
 	 * here too) — so don't fake success for an fd that isn't actually
 	 * ours; forward the real close. */
-	if (!tawcroot_fd_is_reserved(fd))
+	if (!tawcroot_fd_is_reserved(fd)) {
+		tawcroot_binder_close(fd);
 		return TAWC_RAW(TAWC_SYS_close, fd, 0, 0, 0, 0, 0);
+	}
 	return 0;
 }
 
@@ -725,12 +728,13 @@ static long handle_tcsets2_fallback(long fd, unsigned int cmd, long arg)
 
 static long handle_ioctl(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
-	(void)uc;
 	long fd  = args->a;
 	unsigned int cmd = (unsigned int)args->b;
 	long arg = args->c;
 	long gamepad = tawcroot_gamepad_ioctl((int)fd, cmd, arg);
 	if (gamepad != TAWC_ENOSYS) return gamepad;
+	long binder = tawcroot_binder_ioctl((int)fd, cmd, arg, uc);
+	if (binder != TAWC_ENOSYS) return binder;
 
 	if (cmd == TAWC_TCGETS2 || cmd == TAWC_TCSETS2 ||
 	    cmd == TAWC_TCSETSW2 || cmd == TAWC_TCSETSF2) {

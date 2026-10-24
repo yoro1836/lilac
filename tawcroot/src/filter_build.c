@@ -37,7 +37,7 @@ static uint32_t stub_lo_of(uint64_t a) { return (uint32_t)(a & 0xffffffffu); }
 static uint32_t stub_hi_of(uint64_t a) { return (uint32_t)(a >> 32); }
 
 /* Leaf actions of the NR search tree. */
-enum leaf_kind { LEAF_PLAIN, LEAF_CLOSE, LEAF_FCNTL, LEAF_CLONE, LEAF_SIGMASK };
+enum leaf_kind { LEAF_PLAIN, LEAF_CLOSE, LEAF_FCNTL, LEAF_CLONE, LEAF_SIGMASK, LEAF_MMAP };
 
 struct build_ctx {
 	struct sock_filter *prog;
@@ -58,6 +58,7 @@ static enum leaf_kind leaf_kind(const struct build_ctx *c, int nr)
 	if (nr == TAWC_SYS_clone) return LEAF_CLONE;
 	if (nr == TAWC_SYS_close && c->close_floor > 0) return LEAF_CLOSE;
 	if (nr == TAWC_SYS_fcntl && c->close_floor > 0) return LEAF_FCNTL;
+	if (nr == TAWC_SYS_mmap && c->close_floor > 0) return LEAF_MMAP;
 	if (nr == TAWC_SYS_rt_sigprocmask) return LEAF_SIGMASK;
 	return LEAF_PLAIN;
 }
@@ -70,6 +71,7 @@ static size_t action_len(enum leaf_kind k)
 	case LEAF_FCNTL: return 7;  /* + LD a1, JEQ, JEQ */
 	case LEAF_CLONE: return 4;  /* LD a0, JSET, RET ALLOW, JA ipcheck */
 	case LEAF_SIGMASK: return 8;
+	case LEAF_MMAP:  return 5;  /* LD a4, JGE, JEQ -1, JA ipcheck, RET ALLOW */
 	default:         return 1;  /* JA ipcheck */
 	}
 }
@@ -135,6 +137,19 @@ static int emit_tree(struct build_ctx *c, size_t lo, size_t hi)
 						1033 /*F_ADD_SEALS*/, 1, 0)) ||
 				    !emit(c, (struct sock_filter)TAWC_BPF_J(BPF_JMP | BPF_JEQ | BPF_K,
 						1034 /*F_GET_SEALS*/, 0, 1)) ||
+				    !emit_ja_ipcheck(c) ||
+				    !emit(c, (struct sock_filter)TAWC_BPF_S(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)))
+					return 0;
+				break;
+			case LEAF_MMAP:
+				/* Only file maps of fds at or above the floor
+				 * (emulated binder fds) trap. Anonymous maps
+				 * pass fd -1, whose low word is above any floor. */
+				if (!emit(c, (struct sock_filter)TAWC_BPF_S(BPF_LD | BPF_W | BPF_ABS, 48)) ||
+				    !emit(c, (struct sock_filter)TAWC_BPF_J(BPF_JMP | BPF_JGE | BPF_K,
+						(uint32_t)c->close_floor, 0, 2)) ||
+				    !emit(c, (struct sock_filter)TAWC_BPF_J(BPF_JMP | BPF_JEQ | BPF_K,
+						0xffffffffu, 1, 0)) ||
 				    !emit_ja_ipcheck(c) ||
 				    !emit(c, (struct sock_filter)TAWC_BPF_S(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)))
 					return 0;
@@ -229,6 +244,7 @@ long tawcroot_build_filter(struct sock_filter *prog, size_t prog_cap,
 	 *     not in trap set       → ALLOW
 	 *     close, fd < floor     → ALLOW   (closefrom fast path)
 	 *     fcntl, fd < floor, not a seal op → ALLOW
+	 *     mmap, fd < floor or fd == -1 → ALLOW
 	 *     clone with CLONE_VM   → ALLOW   (threads, vfork)
  *     rt_sigprocmask that can't add to the mask
  *                           → ALLOW   (SIG_UNBLOCK, set == NULL)
