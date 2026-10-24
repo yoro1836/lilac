@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A lilac cluster: four-petal florets stacked into a cone, on a stem. Drawn inside the 66dp safe zone of the 108dp adaptive icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#7BC47F"
+        android:pathData="M53,62h2v22h-2z" />
+    <path
+        android:fillColor="#7BC47F"
+        android:pathData="M54,76c4,-6 10,-7 14,-6c-2,5 -8,8 -14,8z" />
+    <path
+        android:fillColor="#C8A2E8"
+        android:pathData="M54,24m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0" />
+    <path
+        android:fillColor="#B48AD9"
+        android:pathData="M47,35m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0M61,35m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0" />
+    <path
+        android:fillColor="#9F72CC"
+        android:pathData="M41,47m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0M54,47m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0M67,47m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0" />
+    <path
+        android:fillColor="#8A5CBE"
+        android:pathData="M47,58m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0M61,58m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0" />
+    <path
+        android:fillColor="#F3E8FF"
+        android:pathData="M53,23h2v2h-2zM46,34h2v2h-2zM60,34h2v2h-2zM40,46h2v2h-2zM53,46h2v2h-2zM66,46h2v2h-2zM46,57h2v2h-2zM60,57h2v2h-2z" />
+</vector>

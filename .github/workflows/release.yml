@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: "Version tag to release, e.g. v0.2.0 or v0.2.0-beta.1"
+        required: true
+      notes:
+        description: "Optional short note shown at the top of the release description"
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark the release as a pre-release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION_TAG: ${{ inputs.version_tag }}
+      RELEASE_NOTES: ${{ inputs.notes }}
+      RELEASE_PRERELEASE: ${{ inputs.prerelease }}
+    steps:
+      - name: Validate tag
+        run: |
+          if ! echo "$RELEASE_VERSION_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "ERROR: Version tag '$RELEASE_VERSION_TAG' does not match expected format vX.Y.Z or vX.Y.Z-suffix"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Write signing config
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > keystore.jks
+          if [ ! -s keystore.jks ]; then
+            echo "ERROR: keystore.jks is empty, check the RELEASE_KEYSTORE_BASE64 secret"
+            exit 1
+          fi
+          cat > keystore.properties << EOF
+          storeFile=$GITHUB_WORKSPACE/keystore.jks
+          storePassword=$RELEASE_STORE_PASSWORD
+          keyAlias=$RELEASE_KEY_ALIAS
+          keyPassword=$RELEASE_KEY_PASSWORD
+          EOF
+      - run: ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest
+      - run: ./gradlew :app:assembleRelease :app:assembleDebug
+      - name: Verify signature
+        run: |
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
+          "$APKSIGNER" verify --verbose app/build/outputs/apk/release/app-release.apk
+      - name: Collect APKs
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk "LILAC-${RELEASE_VERSION_TAG}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "LILAC-${RELEASE_VERSION_TAG}-debug.apk"
+      - run: scripts/ci/release-notes.sh release_body.md
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="LILAC ${RELEASE_VERSION_TAG}"
+          flags=()
+          if [ "$RELEASE_PRERELEASE" = "true" ]; then
+            title="$title (pre-release)"
+            flags+=(--prerelease)
+          fi
+          gh release create "$RELEASE_VERSION_TAG" --target "$GITHUB_SHA" --title "$title" \
+            --notes-file release_body.md "${flags[@]}" \
+            "LILAC-${RELEASE_VERSION_TAG}.apk" "LILAC-${RELEASE_VERSION_TAG}-debug.apk"
+      - name: Remove signing material
+        if: always()
+        run: rm -f keystore.jks keystore.properties

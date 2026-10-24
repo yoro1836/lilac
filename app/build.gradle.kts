@@ -10,39 +10,26 @@ if (hasReleaseSigning) {
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.hilt)
-    alias(libs.plugins.ksp)
-    alias(libs.plugins.room)
     alias(libs.plugins.ktlint)
 }
 
 android {
-    namespace = "com.hexadecinull.vineos"
+    namespace = "io.github.yoro1836.lilac"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.hexadecinull.vineos"
+        applicationId = "io.github.yoro1836.lilac"
         minSdk = 26
-        targetSdk = 37
+        // Kept at 28 on purpose: from 29 on, SELinux stops apps from executing files in their own data directory, which is where a guest rootfs lives
+        targetSdk = 28
         versionCode = 1
         versionName = "0.1.0-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            // Matches the host ABIs AbiCompat knows how to run natively or via QEMU; armeabi is excluded since no 32-bit-only ARM devices ship with Android 8+ (minSdk 26) in practice
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
-        }
-
-        externalNativeBuild {
-            cmake {
-                cppFlags += listOf("-std=c++17", "-Wall", "-Wextra", "-Wpedantic")
-                arguments += listOf(
-                    "-DANDROID_STL=c++_static",
-                    "-DANDROID_PLATFORM=android-26",
-                )
-            }
+            // The guest runs natively, so only the 64-bit host ABIs LILAC supports are packaged (see SUPPORTED_HOST_ABIS)
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
@@ -86,18 +73,11 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
-        aidl = true
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
-
-    room {
-        schemaDirectory("$projectDir/schemas")
+    lint {
+        // targetSdk 28 is a deliberate choice (see defaultConfig), not a stale setting
+        disable += listOf("ExpiredTargetSdkVersion", "OldTargetApi")
     }
 
     testOptions {
@@ -108,10 +88,6 @@ android {
     }
 
     packaging {
-        jniLibs {
-            // libvine_helper.so is an executable that su starts, so it has to be extracted to disk instead of mapped from the APK
-            useLegacyPackaging = true
-        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
@@ -150,33 +126,12 @@ dependencies {
 
     implementation(libs.navigation.compose)
 
-    implementation(libs.hilt.android)
-    ksp(libs.hilt.compiler)
-    implementation(libs.hilt.navigation.compose)
-    implementation(libs.hilt.lifecycle.viewmodel.compose)
-
-    implementation(libs.room.runtime)
-    implementation(libs.room.ktx)
-    ksp(libs.room.compiler)
-
-    implementation(libs.datastore.preferences)
     implementation(libs.coroutines.android)
-    implementation(libs.kotlinx.serialization)
-    implementation(libs.okhttp)
-    implementation(libs.coil.compose)
-    implementation(libs.shizuku.api)
-    implementation(libs.shizuku.provider)
 
     testImplementation(libs.junit)
-    testImplementation(libs.mockk)
-    testImplementation(libs.truth)
-    testImplementation(libs.coroutines.test)
-    testImplementation(libs.room.testing)
 
     androidTestImplementation(libs.junit.android)
     androidTestImplementation(libs.espresso.core)
-    androidTestImplementation(libs.mockk.android)
-    androidTestImplementation(libs.truth)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
 

@@ -1,15 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.VineOS.Base" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">#FFF8F5EF</item>
+    <style name="Theme.Lilac.Base" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFFF7FD</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionBar">false</item>
     </style>
 
     <!-- API 26: no cutout attribute, that needs API 27 -->
-    <style name="Theme.VineOS" parent="Theme.VineOS.Base" />
-
-    <style name="Theme.VineOS.Splash" parent="Theme.VineOS">
-        <item name="android:windowBackground">#FF1A1C19</item>
-    </style>
+    <style name="Theme.Lilac" parent="Theme.Lilac.Base" />
 </resources>
