@@ -96,6 +96,7 @@ static long mock_cwd(void *ctx, char *out, size_t out_cap)
  * bind so failures can identify which bind matched. */
 static void mk_bind(struct tawcroot_bind *b, int fd, const char *dst)
 {
+	memset(b, 0, sizeof *b);   /* leaf, read_only, ...: stack garbage otherwise */
 	b->src_fd  = fd;
 	b->active  = 1;
 	size_t n = strlen(dst);
