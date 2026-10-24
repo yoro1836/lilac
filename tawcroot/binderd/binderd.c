@@ -11,7 +11,8 @@
  * priority inheritance, freezing, oneway spam detection, async space
  * accounting.
  *
- * Single-threaded, epoll driven. Usage: binderd [-v] [--secctx CTX] DIR
+ * Single-threaded, epoll driven.
+ * Usage: binderd [-v] [--abstract] [--secctx CTX] DIR
  */
 
 #define _GNU_SOURCE
@@ -37,6 +38,9 @@
 #include "binder_wire.h"
 
 static int g_verbose;
+/* Listen on abstract sockets named like the socket paths, for hosts
+ * that forbid socket files in DIR (adb shell in /data/local/tmp). */
+static int g_abstract;
 static const char *g_secctx = "u:r:untrusted_app:s0";
 
 static void logf_(const char *fmt, ...)
@@ -1825,14 +1829,18 @@ static void on_thread(struct thread *th)
 static int listen_at(const char *dir, const char *name)
 {
 	struct sockaddr_un sa = { .sun_family = AF_UNIX };
-	if ((size_t)snprintf(sa.sun_path, sizeof sa.sun_path, "%s/%s", dir, name) >= sizeof sa.sun_path) {
+	char *name_at = sa.sun_path + (g_abstract ? 1 : 0);
+	int n = snprintf(name_at, sizeof sa.sun_path - (g_abstract ? 1 : 0), "%s/%s", dir, name);
+	if (n < 0 || (size_t)n >= sizeof sa.sun_path - (g_abstract ? 1 : 0)) {
 		LOG("socket path too long: %s/%s", dir, name);
 		return -1;
 	}
-	unlink(sa.sun_path);
+	socklen_t len = sizeof sa;
+	if (g_abstract) len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + (size_t)n);
+	else unlink(sa.sun_path);
 	int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-	if (fd < 0 || bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0 || listen(fd, 64) < 0) {
-		LOG("listen on %s: %s", sa.sun_path, strerror(errno));
+	if (fd < 0 || bind(fd, (struct sockaddr *)&sa, len) < 0 || listen(fd, 64) < 0) {
+		LOG("listen on %s%s: %s", g_abstract ? "@" : "", name_at, strerror(errno));
 		if (fd >= 0) close(fd);
 		return -1;
 	}
@@ -1867,15 +1875,16 @@ int main(int argc, char **argv)
 	const char *dir = NULL;
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-v")) g_verbose = 1;
+		else if (!strcmp(argv[i], "--abstract")) g_abstract = 1;
 		else if (!strcmp(argv[i], "--secctx") && i + 1 < argc) g_secctx = argv[++i];
 		else if (!dir && argv[i][0] != '-') dir = argv[i];
 		else {
-			fprintf(stderr, "usage: binderd [-v] [--secctx CTX] DIR\n");
+			fprintf(stderr, "usage: binderd [-v] [--abstract] [--secctx CTX] DIR\n");
 			return 2;
 		}
 	}
 	if (!dir) {
-		fprintf(stderr, "usage: binderd [-v] [--secctx CTX] DIR\n");
+		fprintf(stderr, "usage: binderd [-v] [--abstract] [--secctx CTX] DIR\n");
 		return 2;
 	}
 	signal(SIGPIPE, SIG_IGN);
@@ -1928,7 +1937,7 @@ int main(int argc, char **argv)
 	for (size_t i = 0; i < N_CTX; i++) {
 		char path[4096];
 		snprintf(path, sizeof path, "%s/%s", dir, g_ctx[i].name);
-		unlink(path);
+		if (!g_abstract) unlink(path);
 	}
 	unlink(ready);
 	return 0;
