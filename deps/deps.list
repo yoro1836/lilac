@@ -1,0 +1,29 @@
+# Pinned third-party deps. Single source of truth — every build script
+# resolves through scripts/lib/deps.sh, which clones the named repo and
+# verifies HEAD matches the commit below. See AGENTS.md "Vendored Deps".
+#
+# When updating a dep:
+#   1. cd <dest>; git checkout <new commit>; iterate; commit upstream
+#   2. update the commit column here
+#   3. run `scripts/update-deps.sh` on every checkout
+#
+# An out-of-band update (HEAD moved without bumping this file, or this
+# file moved without running update-deps) is a build-time error.
+#
+# Fields are tab-separated:
+#   name <TAB> repo <TAB> commit <TAB> ref-hint <TAB> dest
+#
+# - name      : short identifier used by build scripts (`dep_ensure NAME`)
+# - repo      : git URL
+# - commit    : full sha-1 of the pinned tip. Verified bit-for-bit.
+# - ref-hint  : branch or tag the commit lives on; passed to `git fetch`
+#               so we don't have to fetch every ref. Use "-" if unknown
+#               (we'll fall back to `git fetch origin` and `--unshallow`).
+# - dest      : checkout path, relative to the repo root.
+#
+# Tarball deps (talloc, libmd) are not listed here — their version is
+# baked into the URL inside the build script, so version bumps trigger
+# a fresh download by construction.
+
+# name              repo                                                                  commit                                      ref-hint                       dest
+cleat	https://codeberg.org/sphi/cleat.git	f53455f54700d7238097f903f461b85b41bfbd38	main	deps/cleat

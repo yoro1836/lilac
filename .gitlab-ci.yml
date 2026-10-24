@@ -103,6 +103,13 @@ native-display-tests:
   script:
     - sh app/src/main/cpp/tests/native/run_display_tests.sh
 
+tawcroot-host-tests:
+  extends: .rules-ci
+  stage: test
+  image: gcc:14
+  script:
+    - tawcroot/test.sh --host
+
 rom-kit-tests:
   extends: .rules-ci
   stage: test

@@ -5,8 +5,8 @@ VineOS today needs root: `libvine_helper.so` runs under `su` because
 the structure for the no-root path (roadmap Phase 4), which replaces the
 planned `proot` fallback.
 
-The idea: boot an Android image with **tawcroot**, the seccomp/SIGSYS
-rootless runtime from [TAWC](https://github.com/yoro1836/tawc), emulate
+The idea: boot an Android image with **tawcroot** (`tawcroot/`, the
+seccomp/SIGSYS rootless runtime imported from TAWC and developed here), emulate
 binder in userspace, and draw the guest through a small Wayland compositor
 inside the VineOS app. The guest ROM is a **Waydroid** LineageOS image, which
 is already built for containers.
@@ -63,7 +63,8 @@ is a second implementation behind the same tab-separated protocol
 
 | Path | Contents |
 |---|---|
-| `deps/tawc` | git submodule, pinned commit of yoro1836/tawc. Provides tawcroot and binderd. |
+| `tawcroot/` | the runtime (MIT, imported from TAWC). Host tests: `tawcroot/test.sh --host`. Design docs: `docs/tawcroot/` |
+| `tawcroot/src/binder.c`, `tawcroot/include/binder_wire.h`, `tawcroot/binderd/` | binder emulation (below) |
 | `app/src/main/cpp/rootless/` | rootless backend: instance preparation, process supervision, `waydroid.prop` and `/proc/cmdline` generation, read-only ext4 extractor (`.vrom` images → rootfs directory) |
 | `app/src/main/cpp/helper/` | `helper_main` gains `--rootless`; `HelperServer` dispatches to the root `Container` or the rootless engine |
 | `app/src/main/rust/vine_compositor/` | minimal Smithay compositor (xdg-shell, `wl_shm`, `wl_seat` touch/keyboard, later `android_wlegl`), derived from TAWC's `compositor/` (MIT) without its launcher, Xwayland, ando and remote parts |
@@ -73,16 +74,39 @@ is a second implementation behind the same tab-separated protocol
 | `rom/build/` (later) | `local_manifests` patches over Waydroid's tree, Hetzner build scripts |
 | `scripts/waydroid_to_vrom.py` | Waydroid OTA zips → `.vrom` (system.img + vendor.img, no ramdisk) |
 
-What lives in TAWC (`deps/tawc/tawcroot/`) and is developed there:
+tawcroot also gets the Android device and `/proc`/`/sys` emulation, a
+nested-seccomp no-op for zygote, and an ownership store (see risks).
 
-- `src/binder.c`, `include/binder_wire.h`, `binderd/`: binder emulation.
-- Android device and `/proc`/`/sys` emulation, nested-seccomp no-op for
-  zygote, an ownership store (see risks).
-
-Gradle builds the submodule with `deps/tawc/tawcroot/build.sh` (NDK) and
-packages `libtawcroot.so` and `libbinderd.so` as jniLibs, the same
-extractor trick `libvine_helper.so` uses. tawcroot only supports `arm64-v8a`
+Gradle runs `tawcroot/build.sh` (NDK) from `preBuild` and packages
+`libtawcroot.so` (later `libbinderd.so`) as jniLibs, the same extractor
+trick `libvine_helper.so` uses. tawcroot only supports `arm64-v8a`
 and `x86_64`, so the rootless engine is unavailable on the 32-bit ABIs.
+
+## Binder emulation
+
+- Guest `open("/dev/{binder,hwbinder,vndbinder}")` returns a **memfd** (the
+  receive buffer, so the guest's untrapped `mmap` just works) duplicated to
+  fd ≥ 1000 so its `close` traps. The handler keeps a side table:
+  binder fd → binderd process connection (reserved fd), RW alias mapping.
+- `ioctl` on a binder fd goes over AF_UNIX `SOCK_SEQPACKET`: one process
+  connection, plus one lazily opened connection per thread (binder state is
+  per-thread). FDs in transactions travel via `SCM_RIGHTS`; the receiving
+  handler installs them and patches the buffer through its alias.
+- binderd writes payloads straight into the receiver's memfd. The guest
+  mapping base/size is found once from `/proc/self/maps` and sent to binderd.
+- Blocking reads wait on {thread socket, signalfd(guest unblocked mask)}; a
+  pending guest signal returns `-EINTR` with `write_consumed` updated
+  (libbinder's `talkWithDriver` retries). Same idea as `tawcroot/src/sysv_sem.c`.
+- Sender pid/uid come in-band from tawcroot's virtual identity and pid
+  emulation, not `SO_PEERCRED`.
+- Scope: BC/BR core set, refcount protocol (INCREFS/ACQUIRE/…), death
+  notifications, objects BINDER/HANDLE/FD/FDA/PTR (scatter-gather for HIDL),
+  `SET_CONTEXT_MGR_EXT`, `TRANSACTION_SG`, A13 ioctls (`FREEZE`,
+  `GET_EXTENDED_ERROR`, …), binderfs `features/` files.
+- binderd has a host API, so the helper can register the services
+  Waydroid's host normally provides (`waydroidclipboard`, `waydroidhardware`,
+  `waydroidnotifications`, `waydroidusermonitor`) and call the guest's
+  `waydroidplatform`.
 
 ## ROMs
 
@@ -115,7 +139,7 @@ does it. Keep a snapshot only while iterating often.
 
 ## Milestones
 
-1. binderd + tawcroot shim, host tests (in TAWC): transaction/reply,
+1. binderd + tawcroot shim, host tests: transaction/reply,
    refcounts, fd passing, death notification, scatter-gather.
 2. On device: servicemanager + hwservicemanager + `service list` under
    tawcroot.

@@ -1,0 +1,52 @@
+# Test fixture binary names. One per line; lines starting with '#' and
+# blank lines are ignored. Read by tawcroot/Makefile and tawcroot/build.sh
+# as the single source of truth for:
+#
+#   - the `fixtures` Makefile target's dependency list
+#   - the `-DTAWCROOT_<UPPERCASE_NAME>_BIN=<prefix>/programs/<name>`
+#     defines passed to the cleat test orchestrator
+#
+# Each fixture's source lives at tests/integration/programs/<name>{_<arch>.S,.c}
+# and its on-device path is $TAWC_SCRATCH/programs/<name>.
+#
+# Adding a new fixture: append the name here, then add a build rule to
+# tawcroot/Makefile and a `build_static`/`build_dynamic` line to
+# tawcroot/build-fixtures.sh (those vary per-fixture so they're not derived).
+static_exit42
+static_argc_random
+static_execve_exit42
+static_host_policy
+static_svc_regs_preserved
+static_execve_proc_self_exe
+static_open_creat_argv1
+static_open_rdonly_argv1
+static_expect_erofs_argv1
+static_sleep_open_creat_argv1
+static_fork_open_argv1
+static_small_stack_open_argv1
+static_sigaltstack_open_argv1
+static_sigaltstack_small_open_argv1
+static_sigaltstack_swap_argv1
+static_fork_exec_argv1
+static_fork_closefrom_exec_argv1
+static_vfork_exec_then_fork_exec_argv1
+static_fexecve_argv1
+static_unix_bind_argv1
+static_check_proc_self_fd
+static_getdents_legacy_check
+static_check_proc_exe_argv0
+static_io_uring_deny
+static_drop_ids_execve
+static_check_ids_exit42
+static_drop_ids_devnull_eperm
+static_link_publish_argv12
+static_mknod_chr_fake
+static_namespace_check
+static_init_check
+static_cgroup_check
+static_mount_check
+static_net_check
+dynamic_exit42
+dynamic_argv_check
+dynamic_big_stack
+dynamic_legacy_nr_probe
