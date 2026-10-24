@@ -143,6 +143,43 @@ test(prod_binder_dead_reply_through_nested_call)
 #endif
 }
 
+/* A dying process drops the only ref to another's node while that owner
+ * waits in its read: binderd wakes the owner mid-release (ASan catches
+ * a use of the node after its free). */
+test(prod_binder_last_ref_dies)
+{
+#if defined(__ANDROID__)
+	printf("    skipping (host-only, see prod_binder_transactions)\n");
+	return;
+#else
+	rh_rmrf(BINDER_ROOTFS);
+	rh_rmrf(BINDER_DIR);
+	test_true(build_binder_rootfs());
+	test_true(rh_mkdir_p(BINDER_DIR, 0755));
+	pid_t binderd = start_binderd();
+	test_true(binderd > 0);
+	test_true(rh_poll_for_path(BINDER_DIR "/ready", 100));
+	VecStr cmd = c_init(vec_str, {
+		TAWCROOT_PROD_BIN, "-r", BINDER_ROOTFS,
+		"-b", BINDER_DIR ":/dev/binderfs",
+		"--", "/bin/static_binder_check", "dropref",
+	});
+	int rc = -1;
+	FailableResult res = run_subproc((SubprocArgs){ .vec_cmd = cmd, .exit_code = &rc });
+	failable_result_drop(&res);
+	int alive = waitpid(binderd, 0, WNOHANG) == 0;
+	kill(binderd, SIGTERM);
+	int status = 0;
+	waitpid(binderd, &status, 0);
+	test_int_eq(rc, 42);
+	test_true(alive);
+	test_true(WIFEXITED(status));
+	test_int_eq(WEXITSTATUS(status), 0);
+	rh_rmrf(BINDER_ROOTFS);
+	rh_rmrf(BINDER_DIR);
+#endif
+}
+
 /* binderd --abstract (no socket files, as adb shell needs): the shim
  * falls back to the abstract name. */
 test(prod_binder_abstract_sockets)

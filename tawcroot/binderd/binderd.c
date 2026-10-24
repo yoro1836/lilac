@@ -484,11 +484,16 @@ static void cleanup_ref(struct ref *r)
 	}
 	struct node *n = r->node;
 	list_del(&r->node_entry);
+	/* The strong drop can wake the owner, whose read then runs the
+	 * node work right away and would free a node with no refs left:
+	 * pin it until the weak drop. */
+	n->tmp_refs++;
 	if (r->strong) {
 		r->strong = 0;
-		if (dec_node(n, true, true)) n = NULL;
+		dec_node(n, true, true);
 	}
-	if (n) dec_node(n, false, true);
+	n->tmp_refs--;
+	dec_node(n, false, true);
 	if (r->death) free_death(r->death);
 	free(r);
 }

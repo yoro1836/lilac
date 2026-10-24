@@ -18,6 +18,11 @@
  * may not land, but its own call must end in BR_DEAD_REPLY; it then
  * creates MARKER (the parent's exit status is not the result).
  *
+ * `static_binder_check dropref`: the child holds the only (strong) ref
+ * to a node of the parent and dies while the parent waits in its looper
+ * read. Dropping that ref wakes the parent mid-release; it must get
+ * BR_RELEASE and BR_DECREFS, and binderd must not touch the node after.
+ *
  * Exit 42 on success, otherwise the failing step (1..49).
  */
 
@@ -271,9 +276,80 @@ static int dead_parent(const char *marker)
 	_exit(42);
 }
 
+/* Child side of `dropref`: get the parent's node in a reply, keep the
+ * strong ref, die. */
+static int dropref_child(void)
+{
+	struct conn c;
+	open_binder(&c, 51);
+	send_txn(&c, BC_TRANSACTION, 0, 1, 0, "give", 5, NULL, 0, 0);
+	talk(&c, 1, 52);
+	struct binder_transaction_data tr;
+	uint32_t cmd;
+	while ((cmd = next_real(&c, &tr, 53)) == BR_TRANSACTION_COMPLETE) {}
+	if (cmd != BR_REPLY || tr.offsets_size != 8) FAIL(53);
+	struct flat_binder_object fo;
+	memcpy(&fo, (const void *)(uintptr_t)tr.data.ptr.buffer, sizeof fo);
+	if (fo.hdr.type != BINDER_TYPE_HANDLE) FAIL(54);
+	/* Like libbinder's BpBinder: own refs, then free the buffer (which
+	 * drops the transaction's). */
+	put32(&c, BC_INCREFS);
+	put32(&c, fo.handle);
+	put32(&c, BC_ACQUIRE);
+	put32(&c, fo.handle);
+	free_buf(&c, tr.data.ptr.buffer);
+	talk(&c, 0, 55);
+	usleep(200 * 1000);   /* the parent is back in its read */
+	return 42;
+}
+
+static int dropref_parent(void)
+{
+	struct conn c;
+	open_binder(&c, 1);
+	if (ioctl(c.fd, BINDER_SET_CONTEXT_MGR, &(int){0}) < 0) FAIL(2);
+	pid_t pid = fork();
+	if (pid < 0) FAIL(3);
+	if (pid == 0) _exit(dropref_child());
+	alarm(20);   /* a missing BR_RELEASE/BR_DECREFS fails instead of hanging */
+	put32(&c, BC_ENTER_LOOPER);
+	talk(&c, 1, 4);
+	struct binder_transaction_data tr;
+	uint32_t cmd;
+	while ((cmd = next_real(&c, &tr, 5)) == BR_TRANSACTION_COMPLETE) {}
+	if (cmd != BR_TRANSACTION || tr.code != 1) FAIL(5);
+	free_buf(&c, tr.data.ptr.buffer);
+	struct flat_binder_object node = { .hdr.type = BINDER_TYPE_BINDER, .binder = 0xE0, .cookie = 0xE1 };
+	uint64_t offs[1] = { 0 };
+	send_txn(&c, BC_REPLY, 0, 0, 0, &node, sizeof node, offs, 1, 0);
+	talk(&c, 0, 6);
+	int released = 0, decref = 0;
+	while (!released || !decref) {
+		uint8_t buf[sizeof(struct binder_transaction_data_secctx)];
+		cmd = next_cmd(&c, buf, 7);
+		struct binder_ptr_cookie pc;
+		memcpy(&pc, buf, sizeof pc);
+		if (cmd == BR_INCREFS || cmd == BR_ACQUIRE) {
+			put32(&c, cmd == BR_INCREFS ? BC_INCREFS_DONE : BC_ACQUIRE_DONE);
+			putbytes(&c, &pc, sizeof pc);
+			talk(&c, 0, 8);
+		} else if (cmd == BR_RELEASE || cmd == BR_DECREFS) {
+			if (pc.ptr != 0xE0 || pc.cookie != 0xE1) FAIL(9);
+			if (cmd == BR_RELEASE) released = 1;
+			else decref = 1;
+		} else if (cmd != BR_NOOP && cmd != BR_TRANSACTION_COMPLETE && cmd != BR_SPAWN_LOOPER) {
+			FAIL(10);
+		}
+	}
+	int status = 0;
+	if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 42) FAIL(11);
+	return 42;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc == 3 && !strcmp(argv[1], "dead")) return dead_parent(argv[2]);
+	if (argc == 2 && !strcmp(argv[1], "dropref")) return dropref_parent();
 	struct conn c;
 	open_binder(&c, 1);
 	struct flat_binder_object mgr = {
