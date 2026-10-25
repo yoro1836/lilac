@@ -215,6 +215,10 @@ class VineVMManager @Inject constructor(
         engine.request("exec", instanceId, "5000", "input", "keyevent", keycode.toString())
     }
 
+    fun sendKey(instanceId: String, keycode: Int, down: Boolean) {
+        helperFor(instanceId).send("agent_send", instanceId, GuestProtocol.keyLine(keycode, down))
+    }
+
     fun sendText(instanceId: String, text: String) {
         helperFor(instanceId).send("agent_send", instanceId, GuestProtocol.textLine(text))
     }

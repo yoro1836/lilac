@@ -160,6 +160,17 @@ class VMDisplayViewModel @Inject constructor(
 
     fun pressRecents() = pressKey(KeyEvent.KEYCODE_APP_SWITCH)
 
+    // Volume keys go to the guest while it runs; it makes its own repeats
+    fun onHardwareKey(event: KeyEvent): Boolean {
+        if (event.keyCode !in GUEST_KEYS || !isActive) return false
+        val id = instance?.id ?: return false
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) vmManager.sendKey(id, event.keyCode, true)
+            KeyEvent.ACTION_UP -> vmManager.sendKey(id, event.keyCode, false)
+        }
+        return true
+    }
+
     private fun pressKey(keycode: Int) {
         val id = instance?.id ?: return
         viewModelScope.launch { vmManager.pressKey(id, keycode) }
@@ -178,5 +189,6 @@ class VMDisplayViewModel @Inject constructor(
     companion object {
         private const val OPEN_RETRY_MS = 500L
         private const val INFO_POLL_MS = 400L
+        private val GUEST_KEYS = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
     }
 }

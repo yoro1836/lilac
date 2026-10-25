@@ -2,6 +2,7 @@ package com.hexadecinull.vineos
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -39,6 +40,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.hexadecinull.vineos.domain.shortcuts.ShortcutLauncher
 import com.hexadecinull.vineos.domain.shortcuts.ShortcutTarget
+import com.hexadecinull.vineos.ui.GuestKeys
 import com.hexadecinull.vineos.ui.navigation.Screen
 import com.hexadecinull.vineos.ui.navigation.bottomNavItems
 import com.hexadecinull.vineos.ui.screens.AboutScreen
@@ -68,6 +70,9 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var shortcutLauncher: ShortcutLauncher
 
     private var pendingRoute by mutableStateOf<String?>(null)
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        GuestKeys.handler?.invoke(event) == true || super.dispatchKeyEvent(event)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

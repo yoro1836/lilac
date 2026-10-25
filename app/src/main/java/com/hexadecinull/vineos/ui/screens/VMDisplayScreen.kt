@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -64,6 +65,7 @@ import com.hexadecinull.vineos.data.models.ScreenFit
 import com.hexadecinull.vineos.data.models.VMStatus
 import com.hexadecinull.vineos.helper.GuestProtocol
 import com.hexadecinull.vineos.helper.TouchPoint
+import com.hexadecinull.vineos.ui.GuestKeys
 import com.hexadecinull.vineos.ui.viewmodel.VMDisplayViewModel
 import kotlinx.coroutines.delay
 
@@ -80,6 +82,11 @@ fun VMDisplayScreen(instanceId: String, onBack: () -> Unit, modifier: Modifier =
     DisposableEffect(instanceId) {
         vm.attach(instanceId)
         onDispose { vm.detach() }
+    }
+    DisposableEffect(vm) {
+        val handler = { event: KeyEvent -> vm.onHardwareKey(event) }
+        GuestKeys.handler = handler
+        onDispose { if (GuestKeys.handler === handler) GuestKeys.handler = null }
     }
 
     var controlsVisible by remember { mutableStateOf(false) }
