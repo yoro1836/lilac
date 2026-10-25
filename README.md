@@ -117,8 +117,6 @@ Details: [docs/rootless.md](docs/rootless.md) (design),
 
 - 32-bit guest apps don't run (the guest is 64-bit only).
 - GPU acceleration is experimental; turn it off if apps misdraw or crash.
-- Files apps write directly into shared storage show up in the gallery and
-  media lists only after the next media scan (the Files app sees them at once).
 - Snapshots and app icons are not available for these instances yet.
 - Now and then a boot stalls; stopping and starting the instance again helps.
 - Every guest app is a process of Wayondroid, so the phone's memory is shared:

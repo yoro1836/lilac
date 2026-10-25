@@ -78,6 +78,9 @@ boot, the dev loop in `boot-init.sh`:
   on `MS_BIND|MS_REC` (zygote's `/storage` bind) and maps an fd's path
   back through the newest bind of its directory, so real paths stay
   under `/storage/emulated`.
+  Apps write straight into `/data/media`, so `vine_mediascan` (a guest
+  service started at boot completion) watches it with inotify and has
+  MediaProvider scan what changed (`content call ... scan_file`).
 - lmkd: `/product/etc/init/vine-rootless.rc` replaces it with
   `vine_lmkd` (`app/src/main/cpp/rootless/vine_lmkd.c`). The real one
   needs PSI or memcg, both closed to apps; without any lmkd every oom-adj
