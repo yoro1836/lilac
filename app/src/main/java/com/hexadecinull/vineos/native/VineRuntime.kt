@@ -28,8 +28,8 @@ object VineRuntime {
 
     external fun detachSurface(handle: Long)
 
-    // The guest's frame rate for the phone's display to match; vsync off shows frames as they arrive
-    external fun setDisplayTiming(handle: Long, refreshHz: Int, vsync: Boolean)
+    // The guest's frame rate for the phone's display to match
+    external fun setDisplayFrameRate(handle: Long, refreshHz: Int)
 
     external fun startRendering(handle: Long): Boolean
 

@@ -57,8 +57,6 @@ class InstanceDetailViewModel @Inject constructor(
 
     fun setResolution(resolution: GuestResolution?) = editInstance { it.copy(resolution = resolution?.name) }
 
-    fun setVsync(on: Boolean) = editInstance { it.copy(vsync = on) }
-
     private fun editInstance(change: (VMInstance) -> VMInstance) {
         viewModelScope.launch {
             val current = instanceRepo.getById(instanceIdFlow.value) ?: return@launch

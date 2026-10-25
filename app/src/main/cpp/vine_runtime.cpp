@@ -104,8 +104,8 @@ Java_com_hexadecinull_vineos_native_VineRuntime_detachSurface(JNIEnv*, jobject, 
 }
 
 JNIEXPORT void JNICALL
-Java_com_hexadecinull_vineos_native_VineRuntime_setDisplayTiming(JNIEnv*, jobject, jlong handle, jint refresh_hz, jboolean vsync) {
-    with_display(handle, [&](vine::display::DisplayBridge& d) { d.set_timing(refresh_hz, vsync == JNI_TRUE); return 0; }, 0);
+Java_com_hexadecinull_vineos_native_VineRuntime_setDisplayFrameRate(JNIEnv*, jobject, jlong handle, jint refresh_hz) {
+    with_display(handle, [&](vine::display::DisplayBridge& d) { d.set_frame_rate(refresh_hz); return 0; }, 0);
 }
 
 JNIEXPORT jboolean JNICALL

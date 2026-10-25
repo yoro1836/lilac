@@ -1,20 +1,18 @@
 #include "display_bridge.h"
 #include "../utils/vine_log.h"
 
-#include <android/choreographer.h>
 #include <cstring>
 #include <ctime>
 #include <dlfcn.h>
-#include <android/looper.h>
+#include <unistd.h>
 
 namespace vine::display {
 
 namespace {
 constexpr int kWindowFormatRgba8888 = 1;
-constexpr int kIdleAfterFrames = 45;   // about 0.75 s of unchanged screen at 60 Hz
-constexpr int kIdlePollMs = 40;
-constexpr int kFreePollMs = 2;         // vsync off: how often a new frame is looked for
-constexpr int64_t kFreeIdleMs = 750;   // vsync off: unchanged for this long, poll slowly
+constexpr int kPollMs = 2;          // how often a new frame is looked for
+constexpr int kIdlePollMs = 40;     // the same once the screen stood still
+constexpr int64_t kIdleAfterMs = 750;
 constexpr int64_t kReplaceCheckMs = 500;
 
 int64_t now_ms() {
@@ -58,8 +56,7 @@ void DisplayBridge::set_surface(ANativeWindow* window) {
     apply_frame_rate();
 }
 
-void DisplayBridge::set_timing(int refresh_hz, bool vsync) {
-    vsync_.store(vsync);
+void DisplayBridge::set_frame_rate(int refresh_hz) {
     std::lock_guard<std::mutex> lock(window_mutex_);
     refresh_hz_ = refresh_hz;
     apply_frame_rate();
@@ -99,10 +96,6 @@ void DisplayBridge::stop() {
 }
 
 void DisplayBridge::loop() {
-    // Choreographer callbacks are delivered through this thread's looper
-    ALooper_prepare(0);
-    armed_ = false;
-    idle_frames_ = 0;
     int64_t checked = now_ms();
     int64_t last_frame = 0;
     while (running_.load()) {
@@ -119,32 +112,10 @@ void DisplayBridge::loop() {
                 }
             }
         }
-        if (!vsync_.load()) {
-            // A frame goes out as soon as it is seen
-            if (draw_if_changed()) last_frame = now_ms();
-            ALooper_pollOnce(now_ms() - last_frame < kFreeIdleMs ? kFreePollMs : kIdlePollMs, nullptr, nullptr, nullptr);
-            continue;
-        }
-        if (!armed_) {
-            if (idle_frames_ < kIdleAfterFrames || reader_.sequence() != last_seq_ || force_redraw_.load()) {
-                idle_frames_ = 0;
-                armed_ = true;
-                AChoreographer_postFrameCallback(AChoreographer_getInstance(), &DisplayBridge::on_vsync, this);
-            }
-        }
-        ALooper_pollOnce(armed_ ? 16 : kIdlePollMs, nullptr, nullptr, nullptr);
-    }
-}
-
-void DisplayBridge::on_vsync(long, void* data) {
-    auto* self = static_cast<DisplayBridge*>(data);
-    self->armed_ = false;
-    if (!self->running_.load()) return;
-    if (self->draw_if_changed()) self->idle_frames_ = 0;
-    else ++self->idle_frames_;
-    if (self->vsync_.load() && self->idle_frames_ < kIdleAfterFrames) {
-        self->armed_ = true;
-        AChoreographer_postFrameCallback(AChoreographer_getInstance(), &DisplayBridge::on_vsync, data);
+        // A frame goes out as soon as it is seen. Waiting for the
+        // display's vsync (Choreographer) showed torn frames.
+        if (draw_if_changed()) last_frame = now_ms();
+        usleep((now_ms() - last_frame < kIdleAfterMs ? kPollMs : kIdlePollMs) * 1000);
     }
 }
 
@@ -154,7 +125,7 @@ bool DisplayBridge::draw_if_changed() {
 
     const uint32_t seq = reader_.sequence();
     if (!force_redraw_.load() && seq == last_seq_) return false;
-    if ((seq & 1u) != 0) return false; // mid-frame, the next vsync will see it finished
+    if ((seq & 1u) != 0) return false; // mid-frame, the next look sees it finished
 
     FrameInfo hdr;
     if (!reader_.header(&hdr)) return false;
@@ -173,7 +144,7 @@ bool DisplayBridge::draw_if_changed() {
             window_w_ = (int)hdr.gpu_width;
             window_h_ = (int)hdr.gpu_height;
         }
-        if (reader_.sequence() != seq) return false; // replaced while read, the next vsync gets it
+        if (reader_.sequence() != seq) return false; // replaced while read, the next look gets it
         if (!gpu_.present(hdr.gpu_resource, hdr.gpu_width, hdr.gpu_height, seq)) {
             force_redraw_.store(true);
             return false;
@@ -204,7 +175,7 @@ bool DisplayBridge::draw_if_changed() {
         force_redraw_.store(false);
         frames_drawn_.fetch_add(1);
     } else {
-        force_redraw_.store(true); // try again next vsync
+        force_redraw_.store(true); // try again next look
     }
     return ok;
 }

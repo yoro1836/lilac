@@ -11,7 +11,7 @@
 
 namespace vine::display {
 
-// Draws vinefb frames onto a Surface, follows vsync while frames arrive and idles when the screen is still
+// Draws vinefb frames onto a Surface as they arrive and idles when the screen is still
 class DisplayBridge {
 public:
     struct Info {
@@ -35,10 +35,8 @@ public:
     // Takes its own reference on the window; pass nullptr to detach.
     void set_surface(ANativeWindow* window);
 
-    // The guest's frame rate, which the phone's display is asked to match.
-    // Without vsync a frame is shown as soon as it arrives, not on the
-    // display's next refresh: less latency, more wakeups.
-    void set_timing(int refresh_hz, bool vsync);
+    // The guest's frame rate, which the phone's display is asked to match
+    void set_frame_rate(int refresh_hz);
 
     bool start();
     void stop();
@@ -48,7 +46,6 @@ public:
 private:
     void loop();
     bool draw_if_changed();
-    static void on_vsync(long frame_time_nanos, void* data);
     void apply_frame_rate(); // under window_mutex_
 
     VineFbReader reader_;
@@ -60,15 +57,10 @@ private:
     std::atomic<bool> force_redraw_{true};
     uint32_t last_seq_ = 0;
     int refresh_hz_ = 60; // under window_mutex_
-    std::atomic<bool> vsync_{true};
 
     std::atomic<bool> running_{false};
     std::atomic<uint64_t> frames_drawn_{0};
     std::thread thread_;
-
-    // Only touched on the render thread
-    bool armed_ = false;
-    int idle_frames_ = 0;
 };
 
 } // namespace vine::display

@@ -11,7 +11,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.Speed
-import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -147,7 +146,6 @@ fun InstanceDetailScreen(
                 appResolution = appResolution,
                 onRefreshHz = vm::setRefreshHz,
                 onResolution = vm::setResolution,
-                onVsync = vm::setVsync,
             )
 
             SnapshotsSection(
@@ -231,7 +229,6 @@ private fun DisplaySection(
     appResolution: GuestResolution,
     onRefreshHz: (Int) -> Unit,
     onResolution: (GuestResolution?) -> Unit,
-    onVsync: (Boolean) -> Unit,
 ) {
     Column {
         Text("Display", style = MaterialTheme.typography.titleSmall)
@@ -260,15 +257,8 @@ private fun DisplaySection(
             description = { it?.description ?: "Follows the resolution in Settings" },
             onSelect = onResolution,
         )
-        SwitchSettingsItem(
-            icon = Icons.Outlined.Sync,
-            title = "Vsync",
-            subtitle = "Show frames on the screen's refresh. Off shows them as they come: less lag, more battery.",
-            checked = instance.vsync,
-            onCheckedChange = onVsync,
-        )
         Text(
-            "Frame rate and resolution apply the next time the instance starts, vsync when its screen opens.",
+            "Frame rate and resolution apply the next time the instance starts.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

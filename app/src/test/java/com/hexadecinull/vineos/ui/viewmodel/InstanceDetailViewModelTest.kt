@@ -120,8 +120,6 @@ class InstanceDetailViewModelTest {
         coVerify { instanceRepo.update(instance.copy(refreshHz = 120)) }
         viewModel.setResolution(GuestResolution.LOW)
         coVerify { instanceRepo.update(instance.copy(resolution = "LOW")) }
-        viewModel.setVsync(false)
-        coVerify { instanceRepo.update(instance.copy(vsync = false)) }
     }
 
     private fun buildInstance(id: String, status: VMStatus = VMStatus.STOPPED) = VMInstance(

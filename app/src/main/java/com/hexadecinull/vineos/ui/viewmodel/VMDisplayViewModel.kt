@@ -107,7 +107,7 @@ class VMDisplayViewModel @Inject constructor(
     private fun openDisplay(found: VMInstance) {
         val handle = VineRuntime.openDisplay(vmManager.vinefbPath(found))
         if (handle == 0L) return
-        VineRuntime.setDisplayTiming(handle, found.refreshHz, found.vsync)
+        VineRuntime.setDisplayFrameRate(handle, found.refreshHz)
         synchronized(lock) {
             displayHandle = handle
             surface?.let {
