@@ -2,277 +2,150 @@
 
 # 🌿 Wayondroid
 
-**Waydroid on Android: a free, open-source Android-in-Android app.**
-Runs Waydroid's LineageOS images inside an ordinary app, **without root**,
-on its own userspace container runtime (tawcroot) and binder.
+**Waydroid on Android: a second Android inside an ordinary app, without root.**
 
-[![Pipeline status](https://gitlab.com/Hexadecinull/VineOS/VineOS/badges/main/pipeline.svg)](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/pipelines)
-[![Latest release](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/badges/release.svg)](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/releases)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Renovate enabled](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot)](renovate.json)
-[![GitLab stars](https://img.shields.io/gitlab/stars/Hexadecinull%2FVineOS%2FVineOS)](https://gitlab.com/Hexadecinull/VineOS/VineOS)
-[![GitLab open issues](https://img.shields.io/gitlab/issues/open/Hexadecinull%2FVineOS%2FVineOS)](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/issues)
-[![GitLab open merge requests](https://img.shields.io/gitlab/merge-requests/open/Hexadecinull%2FVineOS%2FVineOS)](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/merge_requests)
-[![Discord](https://img.shields.io/discord/1558189985230889033?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/sVgCAdgGgR)
-
-[**Download**](#installation) · [**Website**](https://vineos.hexadecinull.dpdns.org) · [**Documentation**](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation) · [**Roadmap**](#roadmap) · [**FAQ**](#faq) · [**Discord**](https://discord.gg/sVgCAdgGgR)
 
 </div>
 
----
+Wayondroid boots Waydroid's LineageOS 20 (Android 13) images inside a normal
+Android app on a stock, unrooted phone. There is no VM and no kernel module:
+the guest's own `init`, `zygote`, `system_server`, SurfaceFlinger and apps
+run as the app's processes, on a userspace container runtime (**tawcroot**)
+and a userspace binder (**binderd**).
 
-## Table of Contents
+> **Status: alpha.** Developed and tested on a Galaxy S24 (Exynos 2400,
+> Android 17, arm64-only, SELinux enforcing). Other phones are untested.
+> Expect rough edges; see [Known limitations](#known-limitations).
 
-- [What is Wayondroid?](#what-is-wayondroid)
-- [Features](#features)
-- [Supported devices](#supported-devices)
-- [ROM support](#rom-support)
-- [Installation](#installation)
-- [Documentation](#documentation)
-- [Repositories](#repositories)
-- [Roadmap](#roadmap)
-- [FAQ](#faq)
-- [Community](#community)
-- [Contributing](#contributing)
-- [License](#license)
-- [Credits & acknowledgements](#credits--acknowledgements)
+## What works
 
----
-
-## What is Wayondroid?
-
-Wayondroid runs a complete, isolated Android operating system inside your
-existing Android device, without modifying the host OS or requiring root
-on most paths.
-
-Unlike simple "app cloners" (Parallel Space, Dual Space) that sandbox
-individual apps, Wayondroid virtualizes the full Android stack: its own
-`init`, `Zygote`, `SurfaceFlinger`, `ServiceManager`, and everything else.
-You get a real second phone inside your phone.
-
-> **Status.** The rootless engine boots Waydroid's LineageOS 20 images
-> (`waydroid_arm64_only` recommended) to a usable home screen inside the
-> app on a stock, unrooted phone: touch, keys, text, app launching and
-> WebView work. Networking and GPU acceleration are in progress; see
-> [docs/rootless.md](docs/rootless.md) and
-> [docs/rootless-boot.md](docs/rootless-boot.md). The root engine (real
-> namespaces and mounts) is still there for rooted phones, and the
-> [`rom/`](rom/README.md) folder holds its guest side kit.
-
-**Why Wayondroid over alternatives like VPhoneOS or VMOS?**
-
-| Feature | Wayondroid | VPhoneOS | VMOS | Virtual Master |
-|---|:---:|:---:|:---:|:---:|
-| Open source | ✅ | ❌ | ❌ | ❌ |
-| Ad-free | ✅ | ❌ | ❌ | ❌ |
-| Free (fully) | ✅ | Partial | Partial | ❌ |
-| 32-bit on arm64-only devices | ✅ | ✅ | ❌ | ❌ |
-| Runs on arm, x86, and x86_64 hosts | ✅ | ❌ | ❌ | ❌ |
-| GPL-3.0 licensed | ✅ | ❌ | ❌ | ❌ |
-| Material You | ✅ | ❌ | ❌ | ❌ |
-| Multiple ROM versions | ✅ | Paid | Partial | Paid |
-| No telemetry | ✅ | ❌ | ❌ | ❌ |
-
----
-
-## Features
-
-- 🆓 **Completely free**: no paywalls, no premium tiers, no ads, ever
-- 🔓 **Open source**: GPL-3.0, fully auditable
-- 📦 **Multiple ROMs**: Android 7.1, 9.0, 11, 12 (more planned)
-- 🏗️ **32-bit support everywhere**: runs armeabi-v7a apps on arm64-only devices via QEMU user-mode binary translation
-- 🖥️ **Multi-host support**: builds and runs on arm64-v8a, armeabi-v7a, x86_64, and x86 devices, not just ARM
-- 🎨 **Material You**: dynamic color from your wallpaper on Android 12+, static vine-green fallback on 8-11
-- ⚡ **Lightweight**: zero background overhead when no VM is running, no persistent daemons
-- 🔒 **Isolated**: PID, mount, UTS, IPC, and network namespace separation
-- 🌱 **Multi-instance**: run multiple independent VMs simultaneously
-- 🔗 **App shortcuts**: pin any app of an instance to your home screen, a tap starts the instance and opens the app
-- 💾 **Big storage**: instance storage up to your free space, the disk is a sparse file so it only uses what the guest writes
-- 🖥️ **Fullscreen guest**: the guest screen fills the phone, the three on-screen navigation buttons are hidden by default
-- 🔧 **Root support**: optional Magisk/root inside instances (requires rooted host)
-- ⚡ **Shizuku**: optional, no-root privilege probe via ADB/Wireless Debugging (see [NOROOT_RESEARCH.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/reference/NOROOT_RESEARCH.md))
-- 📱 **minSdk 26, targetSdk 37**: supports Android 8.0 through Android 17
-
----
-
-## Supported devices
-
-- Android 8.0 (API 26) or higher as the host OS
-- `arm64-v8a`, `armeabi-v7a`, `x86_64`, or `x86` processor
-- A kernel with Linux namespaces and loop device support (standard since Android 4.4)
-
-32-bit ARM guest apps run natively where the host CPU supports it, and
-through QEMU user-mode emulation everywhere else, including on the growing
-range of arm64-only SoCs across many vendors, and on non-ARM hosts
-entirely. See
-[ARCHITECTURE.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/reference/ARCHITECTURE.md#abi-compatibility) for the full
-host/guest compatibility matrix.
-
----
-
-## ROM support
-
-| ROM | Android Version | API | 32-bit | Status |
-|---|---|---|---|---|
-| `vine-rom-7` | Android 7.1.2 Nougat | 25 | ✅ | 🟡 In progress |
-| `vine-rom-9` | Android 9.0 Pie | 28 | ✅ | 🔴 Planned |
-| `vine-rom-11` | Android 11 | 30 | ✅ | 🔴 Planned |
-| `vine-rom-12` | Android 12 | 31 | ✅ | 🔴 Planned |
-
-ROMs are built from AOSP targeting the `ranchu` virtual device board and
-distributed as `.vrom` archives. See
-[BUILDING.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/guides/BUILDING.md#building-aosp-rom-images) for the ROM
-build guide.
-
----
-
-## Installation
-
-Download the latest release APK from the
-[Releases page](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/releases).
-
-Wayondroid is not yet on the Play Store. First release planned at Beta
-stability.
-
----
-
-## Documentation
-
-All project documentation, including the architecture guide, build
-instructions, usage guide, contributing guide, and policies, lives in its own
-repository, [VineOS-Documentation](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation). Start there.
-
----
-
-## Repositories
-
-Wayondroid is split across three GitLab repositories:
-
-| Repository | What it contains |
+| Area | State |
 |---|---|
-| [VineOS](https://gitlab.com/Hexadecinull/VineOS/VineOS) | The Android app, the native runtime, the guest side ROM kit (`rom/`), and CI (this repository) |
-| [VineOS-Website](https://gitlab.com/Hexadecinull/VineOS/VineOS-Website) | The project website |
-| [VineOS-Documentation](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation) | Guides, reference, and project policies |
+| Boot | Waydroid LineageOS 20 `waydroid_arm64_only` images, VANILLA and GAPPS, boot to a usable home screen without root |
+| Display | Guest frames go straight to the screen. With GPU acceleration on, frames stay on the phone's GPU (zero-copy, Android 10+); otherwise the guest renders in software |
+| GPU | Experimental: the guest's Vulkan/GLES runs on the phone's GPU through gfxstream |
+| Input | Multi-touch, keys, text input. The phone's volume keys control the guest while its screen is open |
+| Audio | Guest playback through the phone's speakers (a PulseAudio server for Waydroid's audio HAL, played with AAudio) |
+| Network | The guest is online through the phone's connection |
+| Storage | Shared storage (`/sdcard`) is mounted: the Files app, file and photo pickers work |
+| Google apps | GAPPS images run Google Play services |
+| Memory | The guest kills its cached apps when it goes over the instance's RAM setting or the phone runs low |
+| Per instance | RAM, storage size, frame rate (up to the phone's refresh rate) and resolution |
+| App | Material You UI, multiple instances, home-screen shortcuts to guest apps |
 
----
+## Requirements
 
-## Roadmap
+- A 64-bit phone (`arm64-v8a`). tawcroot also builds for `x86_64`; the
+  32-bit ABIs only get the root engine.
+- The app installs on Android 8.0 and newer, but the engine has only been
+  tested on Android 17. Zero-copy display needs Android 10, matching the
+  phone's refresh rate to the guest needs Android 11.
+- Plenty of free RAM: the guest is a whole Android, GAPPS more so.
+- Storage: about twice the ROM's size per instance (images plus the extracted
+  rootfs), plus what the guest writes.
 
-### Phase 1: Foundation *(current)*
-- [x] Linux namespace container runtime (`unshare`, `pivot_root`, `execve`)
-- [x] QEMU binfmt_misc integration for 32-bit support (4-layer AArch32 detection)
-- [x] JNI bridge with `FramebufferBridge` + `UInputBridge` wiring
-- [x] Material You UI: Home, ROMs, Settings, and detail/create-instance screens
-- [x] Room DB + ViewModels + DataStore preferences
-- [x] ROM downloader (manifest fetch, streaming download, SHA-256 verification)
-- [x] Multi-host-ABI support (arm64-v8a, armeabi-v7a, x86_64, x86)
-- [x] Root helper process that owns every guest, spoken to over stdin and stdout
-- [x] Engine tested on a real kernel with a fake ROM (namespaces, loop mounts, ext4 `/data`, cgroups, NAT, snapshots)
-- [x] ROM kit for the guest side: init patch notes, guest agent, framebuffer writer, `.vrom` packer (`rom/`)
-- [ ] First bootable Android 7.1.2 ROM image
+## Getting a ROM
 
-### Phase 2: Display & Input
-- [x] Framebuffer render loop (mmap to ANativeWindow blit)
-- [x] RGB565 to RGBA8888 conversion for Android 7.x guests
-- [x] Single-touch forwarding, synced to the guest's real display resolution
-- [x] Hardware key forwarding (back, home, volume, recents)
-- [x] Multi-touch forwarding, up to 10 fingers, through the guest agent (needs a ROM that runs it)
-- [x] Hidden on-screen navigation buttons and a guest screen that fills the phone
-- [ ] Clipboard sharing host to guest (guest agent side written, app side pending)
+Wayondroid boots `.vrom` files: a zip holding a `manifest.json`, `system.img`
+and `vendor.img`. Build one from Waydroid's official images:
 
-### Phase 3: Storage & ROMs
-- [x] Writable `/data` partition (sparse ext4 image per instance, sizes beyond 16 GB)
-- [x] Instance snapshot / restore
-- [x] App shortcuts on the home screen
-- [ ] Android 9, 11, 12 ROM images
-- [ ] ROM CDN + in-app download UI completion
+1. Download a system image and the vendor image from Waydroid's OTA server.
+   Use the **`waydroid_arm64_only`** builds (the guest runs 64-bit only):
+   - system: `https://ota.waydro.id/system/lineage/waydroid_arm64_only/VANILLA.json`
+     or `.../GAPPS.json` for Google apps
+   - vendor: `https://ota.waydro.id/vendor/waydroid_arm64_only/MAINLINE.json`
+     (one vendor image serves both)
 
-### Phase 4: No-root Path
-- [x] Shizuku integration to probe whether ADB-shell privilege clears `unshare`/`mount` on a given device (Settings → Shizuku)
-- [ ] `proot` fallback for non-rooted devices
-- [ ] Android Virtualization Framework (AVF) backend (Android 13+)
+   Each JSON lists the file's URL and sha256.
+2. Unzip both into one folder, so it holds `system.img` and `vendor.img`.
+3. Pack them:
 
-### Phase 5: Polish
-- [ ] Play Store + F-Droid release
-- [ ] Magisk inside instances
-- [ ] Per-instance VPN / network isolation
-- [ ] GPU passthrough research
+   ```sh
+   python3 rom/package_vrom.py --kind waydroid IMAGES_DIR waydroid-lineage20.vrom \
+       --name "Waydroid LineageOS 20" --android-version 13 --api-level 33
+   ```
+4. In the app, import the `.vrom` on the **ROMs** tab, then create an instance from it.
 
----
+The first boot extracts the images and compiles every app, so it takes a few
+minutes; later boots are much faster.
 
-## FAQ
+## Building
 
-**Does Wayondroid require root?**
-Today yes. The engine runs in a small helper started with `su`, because
-`unshare()` and `mount()` need `CAP_SYS_ADMIN`. The no-root path is Phase 4
-and is not built yet. Root inside an instance (Magisk) is a separate, optional thing.
+```sh
+./gradlew :app:assembleDebug
+```
 
-**Does Wayondroid work on arm64-only phones without 32-bit support?**
-Yes, this is one of the core things Wayondroid is built for. We're aiming to
-support a wide range of SoCs across vendors, not just a specific model or
-two, and Wayondroid auto-detects arm64-only chips and switches to QEMU mode
-automatically.
+Needs the Android SDK and NDK. Gradle builds tawcroot and binderd
+(`tawcroot/build.sh`) and the native code. The GPU pieces (gfxstream host
+renderer, the guest's gfxstream Vulkan driver, `vine_kumquat`) are prebuilt by
+`scripts/gpu/build-gpu.sh` into `app/src/main/jniLibs/`.
 
-**Why GPL-3.0 and not MIT/Apache?**
-Wayondroid uses QEMU (GPL-2.0-or-later) and is architecturally inspired by
-Anbox/Waydroid (GPL-3.0). GPL-3.0 ensures commercial forks must also open
-their changes.
+Host tests: `tawcroot/test.sh --host` for the runtime and the scripts in
+`app/src/main/cpp/tests/native/` (`run_rootless_tests.sh`,
+`run_wayland_tests.sh`, `run_display_tests.sh`, `run_pulse_tests.sh`) for the
+engine. App unit tests: `./gradlew :app:testDebugUnitTest`.
 
-**Can I use Wayondroid on x86_64 Android devices or emulators?**
-Yes. Wayondroid builds and runs on `arm64-v8a`, `armeabi-v7a`, `x86_64`, and
-`x86` hosts; ARM guest ROMs run through QEMU on non-ARM hosts. See
-[ARCHITECTURE.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/reference/ARCHITECTURE.md#abi-compatibility) for exactly
-what runs natively versus emulated on each host.
+## How it works
 
----
+```
+Wayondroid app (one app uid, no root)
+├─ UI, instance manager, display (SurfaceView / SurfaceControl)
+└─ libvine_helper.so --rootless
+     ├─ binderd       binder, hwbinder and vndbinder in userspace
+     ├─ vine_wl       Wayland server for Waydroid's hwcomposer → shared vinefb
+     ├─ vine_pulse    PulseAudio server → AAudio
+     ├─ vine_kumquat  gfxstream host renderer (GPU acceleration on)
+     └─ tawcroot --init -r <rootfs> -- /system/bin/init
+          └─ the guest: servicemanager, SurfaceFlinger, zygote64,
+             system_server, apps
+```
 
-## Community
+- **tawcroot** traps the guest's syscalls with seccomp and emulates what an app
+  may not do: root identities and file ownership, mounts and mount namespaces,
+  `/proc` and `/sys`, devices, network interfaces.
+- **binderd** implements the binder driver over Unix sockets.
+- Inside the guest, small stand-ins replace what needs kernel features apps
+  don't get: `vine_lmkd` (memory killer), a vold shim (shared storage
+  without FUSE) and a gralloc shim.
 
-Questions, bug reports, or just curious how it works? Join the official
-[Discord](https://discord.gg/sVgCAdgGgR). It's the quickest way to
-reach the developers and other users.
+Details: [docs/rootless.md](docs/rootless.md) (design),
+[docs/rootless-boot.md](docs/rootless-boot.md) (what the boot needs, and why),
+[docs/tawcroot/](docs/tawcroot/) (the runtime).
 
----
+## Known limitations
 
-## Contributing
+- 32-bit guest apps don't run (the guest is 64-bit only).
+- GPU acceleration is experimental; turn it off if apps misdraw or crash.
+- Files apps write directly into shared storage show up in the gallery and
+  media lists only after the next media scan (the Files app sees them at once).
+- Snapshots and app icons are not available for these instances yet.
+- Now and then a boot stalls; stopping and starting the instance again helps.
+- Every guest app is a process of Wayondroid, so the phone's memory is shared:
+  close other heavy apps for a smoother guest.
 
-Contributions of every size are welcome, from typo fixes to ROM images. Read
-the [contributing guide](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/project/CONTRIBUTING.md) first, then open an
-[issue](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/issues) or a [merge request](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/merge_requests). To
-report a security vulnerability, follow the
-[security policy](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/project/SECURITY.md) instead of opening a public issue.
-
----
+The older root engine (real namespaces and loop mounts, for rooted phones) and
+its guest kit in [`rom/`](rom/README.md) are still in the tree but have not
+booted a ROM yet.
 
 ## License
 
-Wayondroid is licensed under the GNU General Public License v3.0. See
-[LICENSE](LICENSE) for the full text, and
-[TERMS.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/project/TERMS.md) for the project's terms of use.
-
-### Third-party components
+Wayondroid is licensed under the GNU General Public License v3.0, see
+[LICENSE](LICENSE). tawcroot comes from TAWC (MIT).
 
 | Component | License | Use |
 |---|---|---|
-| [QEMU](https://www.qemu.org/) | GPL-2.0-or-later | ARMv7 user-mode emulation |
-| [AOSP](https://source.android.com/) | Apache-2.0 + various | ROM images |
-| [Jetpack Compose](https://developer.android.com/jetpack/compose) | Apache-2.0 | UI framework |
-| [Hilt](https://dagger.dev/hilt/) | Apache-2.0 | Dependency injection |
-| [Room](https://developer.android.com/training/data-storage/room) | Apache-2.0 | Local database |
+| [Waydroid](https://github.com/waydroid/waydroid) / [LineageOS](https://lineageos.org/) images | Apache-2.0 and others | Guest ROM |
+| [gfxstream](https://android.googlesource.com/platform/hardware/google/gfxstream/), [Mesa](https://www.mesa3d.org/) | Apache-2.0, MIT | GPU acceleration |
+| [QEMU](https://www.qemu.org/) | GPL-2.0-or-later | 32-bit emulation (root engine) |
+| [Jetpack Compose](https://developer.android.com/jetpack/compose), [Hilt](https://dagger.dev/hilt/), [Room](https://developer.android.com/training/data-storage/room) | Apache-2.0 | App |
 
----
+## Credits
 
-## Credits & acknowledgements
-
-- **[Anbox](https://github.com/anbox/anbox)**: the original Android-in-a-Linux-container project; Wayondroid's container architecture is directly inspired by its design
-- **[Waydroid](https://github.com/waydroid/waydroid)**: maintained successor, reference for namespace setup and binfmt_misc integration
-- **[redroid](https://github.com/remote-android/redroid-doc)**: Android in Docker, reference for mount table and device node setup
-- **[QEMU](https://www.qemu.org/)**: the backbone of Wayondroid's 32-bit emulation
-- **[VPhoneOS / VPhoneGaGa](https://vphoneos.com/)**: the closed-source inspiration that Wayondroid aims to replace with an open alternative
-- The entire Android homebrew and modding community
-
----
-
-<div align="center">
-  <sub>Made with 🌿 by <a href="https://gitlab.com/Hexadecinull">Hexadecinull</a> and contributors</sub>
-</div>
+- **[Waydroid](https://github.com/waydroid/waydroid)**: the container-ready
+  Android images and hwcomposer this builds on
+- **TAWC** (Tess's Android Wayland Compositor): where tawcroot started
+- **[Anbox](https://github.com/anbox/anbox)** and
+  **[redroid](https://github.com/remote-android/redroid-doc)**: earlier
+  Android-in-a-container work
+- **gfxstream / rutabaga** (AOSP, crosvm): the GPU stack
