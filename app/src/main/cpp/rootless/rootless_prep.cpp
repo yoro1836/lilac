@@ -3,6 +3,7 @@
 #include "../utils/vine_utils.h"
 
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -86,6 +87,13 @@ std::string rootless_rc(bool own_audio_hal) {
         "    disabled\n"
         "    override\n"
         "\n"
+        // Waydroid's statsd can't find libstatssocket (APEX library
+        // namespaces) and would restart every few seconds. Parsed before
+        // the APEX's own definition, so this one wins.
+        "service statsd /apex/com.android.os.statsd/bin/statsd\n"
+        "    class main\n"
+        "    disabled\n"
+        "\n"
         // The engine's boot signal, in its /run/user/1000
         "on property:sys.boot_completed=1\n"
         "    write /run/user/1000/boot_completed 1\n";
@@ -122,6 +130,90 @@ std::string waydroid_prop(int dpi) {
 bool is_elf32(const std::string& path) {
     const auto head = read_file_prefix(path, 5);
     return head && head->size() == 5 && head->compare(0, 4, "\x7f" "ELF") == 0 && (*head)[4] == 1;
+}
+
+// The HAL a vendor service binary serves, from its name:
+// android.hardware.media.omx@1.0-service -> android.hardware.media.omx
+std::string hal_of_binary(const std::string& path) {
+    std::string base = path.substr(path.rfind('/') + 1);
+    const size_t at = base.find('@');
+    if (at != std::string::npos) return base.substr(0, at);
+    const size_t svc = base.find("-service");
+    return svc == std::string::npos ? base : base.substr(0, svc);
+}
+
+// The manifest without the <hal> entries named `hal`
+std::string drop_manifest_hal(const std::string& xml, const std::string& hal) {
+    std::string out;
+    size_t pos = 0;
+    for (;;) {
+        const size_t start = xml.find("<hal", pos);
+        if (start == std::string::npos) break;
+        const size_t end = xml.find("</hal>", start);
+        if (end == std::string::npos) break;
+        const size_t stop = end + 6;
+        const std::string block = xml.substr(start, stop - start);
+        const bool drop = block.find("<name>" + hal + "</name>") != std::string::npos;
+        size_t line_start = start;
+        while (line_start > pos && (xml[line_start - 1] == ' ' || xml[line_start - 1] == '\t')) --line_start;
+        out += xml.substr(pos, (drop ? line_start : stop) - pos);
+        pos = stop;
+        if (drop && pos < xml.size() && xml[pos] == '\n') ++pos;
+    }
+    return out + xml.substr(pos);
+}
+
+// Vendor services the host can't run (32-bit only binaries): their rc
+// files go and so do their VINTF entries, so nothing waits for them
+// (system_server waits forever for a declared IOmxStore, hwservicemanager
+// keeps restarting it). `keep` is served by our own service instead.
+bool drop_32bit_vendor_services(const std::string& R, const std::string& keep, std::string* error) {
+    std::vector<std::string> hals;
+    const std::string init_dir = R + "/vendor/etc/init";
+    if (DIR* d = opendir(init_dir.c_str())) {
+        std::vector<std::string> rcs;
+        while (dirent* e = readdir(d)) {
+            const std::string n = e->d_name;
+            if (n.size() > 3 && n.compare(n.size() - 3, 3, ".rc") == 0) rcs.push_back(n);
+        }
+        closedir(d);
+        for (const auto& n : rcs) {
+            const std::string rc = init_dir + "/" + n;
+            bool any = false, all32 = true;
+            std::vector<std::string> rc_hals;
+            for (const auto& line : split_lines(read_file(rc).value_or(""))) {
+                char name[128], bin[256];
+                if (sscanf(line.c_str(), " service %127s %255s", name, bin) != 2) continue;
+                any = true;
+                if (!is_elf32(R + bin)) {
+                    all32 = false;
+                    continue;
+                }
+                const std::string hal = hal_of_binary(bin);
+                if (hal == keep) all32 = false;
+                else rc_hals.push_back(hal);
+            }
+            if (!any || !all32) continue;
+            if (unlink(rc.c_str()) != 0) return fail_errno(error, "remove " + rc);
+            hals.insert(hals.end(), rc_hals.begin(), rc_hals.end());
+        }
+    }
+    if (hals.empty()) return true;
+    const std::string vintf = R + "/vendor/etc/vintf";
+    std::vector<std::string> manifests = {vintf + "/manifest.xml"};
+    if (DIR* d = opendir((vintf + "/manifest").c_str())) {
+        while (dirent* e = readdir(d))
+            if (e->d_name[0] != '.') manifests.push_back(vintf + "/manifest/" + e->d_name);
+        closedir(d);
+    }
+    for (const auto& m : manifests) {
+        const auto xml = read_file(m);
+        if (!xml) continue;
+        std::string edited = *xml;
+        for (const auto& hal : hals) edited = drop_manifest_hal(edited, hal);
+        if (edited != *xml && !write_mode(m, edited, 0644, error)) return false;
+    }
+    return true;
 }
 
 // 64-bit-only zygote: the 64_32 one without its 32-bit secondary
@@ -270,6 +362,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
             if (!write_mode(z + "/init.zygote64.rc", zygote64_rc(*z6432), 0644, error)) return false;
         }
         if (own_audio_hal && !copy_mode(hal_service, R + "/vendor/bin/hw/vine_hal_service", 0755, error)) return false;
+        if (!drop_32bit_vendor_services(R, own_audio_hal ? "android.hardware.audio.service" : "", error)) return false;
     }
     if (!copy_mode(o.lib_dir + "/libvine_lmkd.so", R + "/system/bin/vine_lmkd", 0755, error)) return false;
     // $R/product is an absolute symlink, its files are in system/product

@@ -77,6 +77,12 @@ boot, the dev loop in `boot-init.sh`:
   implementations instead (audioserver and AudioService wait for them).
   `waydroid_arm64_only` images ship a 64-bit service (and a 64-bit
   mediaserver), which is kept.
+- Hosts without AArch32 also drop the image's other 32-bit-only vendor
+  services (64_32 images: omx, camera provider, cas): their rc files and
+  VINTF entries go, so system_server does not wait forever for a
+  declared IOmxStore and init does not keep restarting them. statsd is
+  disabled (it cannot find libstatssocket and restarts every few
+  seconds).
 - No keychords: `vine-rootless.rc` overrides bugreport without its
   `keycodes`, else init opens the input FIFOs and blocks until the
   hwcomposer writes one. `/dev/input` starts empty each boot.

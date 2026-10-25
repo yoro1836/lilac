@@ -150,8 +150,21 @@ def build_images(top, inst, audio_hal_class=1):
     vend = os.path.join(top, "vend")
     shutil.rmtree(vend, ignore_errors=True)
     os.makedirs(os.path.join(vend, "bin/hw"), exist_ok=True)
-    with open(os.path.join(vend, "bin/hw/android.hardware.audio.service"), "wb") as f:
-        f.write(b"\x7fELF" + bytes([audio_hal_class]) + b"\0" * 59)  # ELFCLASS32 or 64
+    elf = lambda cls: b"\x7fELF" + bytes([cls]) + b"\0" * 59  # ELFCLASS32 or 64
+    for name, cls in (("android.hardware.audio.service", audio_hal_class), ("android.hardware.media.omx@1.0-service", 1),
+                      ("android.hardware.light@2.0-service", 2)):
+        with open(os.path.join(vend, "bin/hw", name), "wb") as f:
+            f.write(elf(cls))
+    os.makedirs(os.path.join(vend, "etc/init"), exist_ok=True)
+    os.makedirs(os.path.join(vend, "etc/vintf/manifest"), exist_ok=True)
+    for rc, svc, name in (("audio.rc", "vendor.audio-hal", "android.hardware.audio.service"),
+                          ("omx.rc", "vendor.media.omx", "android.hardware.media.omx@1.0-service"),
+                          ("light.rc", "vendor.light", "android.hardware.light@2.0-service")):
+        open(os.path.join(vend, "etc/init", rc), "w").write(f"service {svc} /vendor/bin/hw/{name}\n    class hal\n")
+    hal = lambda n: f"    <hal format=\"hidl\">\n        <name>{n}</name>\n    </hal>\n"
+    open(os.path.join(vend, "etc/vintf/manifest.xml"), "w").write(
+        "<manifest>\n" + hal("android.hardware.media.omx") + hal("android.hardware.light") + "</manifest>\n")
+    open(os.path.join(vend, "etc/vintf/manifest/omx.xml"), "w").write("<manifest>\n" + hal("android.hardware.media.omx") + "</manifest>\n")
     open(os.path.join(vend, "build.prop"), "w").write("ro.vendor.product.cpu.abilist=arm64-v8a,armeabi-v7a\nro.vendor.x=1\n")
     make_image(sysd, os.path.join(inst, "system.img"), 16)
     make_image(vend, os.path.join(inst, "vendor.img"), 8)
@@ -308,6 +321,12 @@ def main():
     check(os.readlink(os.path.join(R, "apex/com.android.art")) == "/system/apex/com.android.art", "apex symlink")
     check(os.path.isdir(os.path.join(R, "dev/input")) and os.path.isfile(os.path.join(R, "dev/kmsg")), "dev dirs")
     check(os.path.getsize(os.path.join(W, "tawcroot/owners")) > 0, "ownership table")
+    init_dir = os.path.join(R, "vendor/etc/init")
+    check(sorted(os.listdir(init_dir)) == ["audio.rc", "light.rc"], "32-bit omx rc dropped: " + str(os.listdir(init_dir)))
+    man = read(os.path.join(R, "vendor/etc/vintf/manifest.xml"))
+    check("media.omx" not in man and "<name>android.hardware.light</name>" in man and man.count("<hal") == 1, "manifest: " + man)
+    check("media.omx" not in read(os.path.join(R, "vendor/etc/vintf/manifest/omx.xml")), "manifest fragment")
+    check("service statsd" in rc, "statsd disabled")
     check("--create 640x480" in read(os.path.join(W, "wl-args.txt")), "display size")
     check(os.path.isfile(os.path.join(inst, "shared/vinefb")), "vinefb created")
     check("/system/bin" in read(os.path.join(W, "init-env.txt")), "init gets the guest PATH")
