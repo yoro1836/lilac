@@ -8,7 +8,10 @@
  *   - open("/dev/fuse") gives one end of a socket pair whose other end
  *     holds a FUSE_INIT, all MediaProvider's FUSE daemon needs to report
  *     itself started; it then waits for requests that never come.
- *   - mount(..., "fuse", ...) succeeds without doing anything.
+ *   - mount(..., "fuse", ...) succeeds without doing anything, and so
+ *     do vold's binds of the lower filesystem (pass-through, Android/data
+ *     and obb): the rc's binds stand in for them, and more binds of the
+ *     same directory would change which path a file's real path shows.
  * Apps reach the files through the binds instead of the daemon. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -17,6 +20,7 @@
 #include <linux/fuse.h>
 #include <stdarg.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -78,6 +82,9 @@ EXPORT int mount(const char *source, const char *target, const char *type, unsig
 {
     static int (*real)(const char *, const char *, const char *, unsigned long, const void *);
     if (type && !strcmp(type, "fuse")) return 0;
+    if ((flags & MS_BIND) && source &&
+        (!strncmp(source, "/data/media", 11) || !strncmp(source, "/mnt/pass_through/", 18)))
+        return 0;
     if (!real) real = (int (*)(const char *, const char *, const char *, unsigned long, const void *))dlsym(RTLD_NEXT, "mount");
     return real(source, target, type, flags, data);
 }

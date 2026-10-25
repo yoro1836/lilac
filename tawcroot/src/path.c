@@ -206,7 +206,11 @@ long tawcroot_host_path_to_guest_abs(const char *host, size_t n,
 		if (!b->active || b->src_len == 0) continue;
 		if (!host_prefix_match(host, n, b->src, b->src_len))
 			continue;
-		if (b->src_len > best_pl) {
+		/* Equal sources: the newest bind, like a kernel path seen
+		 * through the mount it was last bound to (Android's zygote
+		 * binds /mnt/user/<u> onto /storage last) */
+		if (b->src_len > best_pl ||
+		    (best_bind && b->src_len == best_pl && b->mount_id > best_bind->mount_id)) {
 			best_bind = b;
 			best_pl = b->src_len;
 		}
@@ -230,6 +234,7 @@ int tawcroot_host_path_in_ro_bind(const char *host, size_t n)
 	 * the two can't disagree about which bind (or the rootfs) owns a
 	 * host path — an RW bind nested under an RO bind src stays
 	 * writable here exactly like it does in translation. */
+	const struct tawcroot_bind *best_bind = 0;
 	int    best_ro = 0;
 	size_t best_pl = 0;
 
@@ -242,7 +247,9 @@ int tawcroot_host_path_in_ro_bind(const char *host, size_t n)
 		const struct tawcroot_bind *b = &tawcroot_binds[bi];
 		if (!b->active || b->src_len == 0) continue;
 		if (!host_prefix_match(host, n, b->src, b->src_len)) continue;
-		if (b->src_len > best_pl) {
+		if (b->src_len > best_pl ||
+		    (best_bind && b->src_len == best_pl && b->mount_id > best_bind->mount_id)) {
+			best_bind = b;
 			best_pl = b->src_len;
 			best_ro = b->read_only;
 		}

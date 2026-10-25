@@ -104,6 +104,16 @@ int main(int argc, char **argv)
 
 	if (mount("/mnt/t", "/mnt/b", 0, MS_BIND, 0) != 0) return 30;
 	if (!exists("/mnt/b/x")) return 31;
+	/* An fd's path (bionic's realpath) goes through the newest of the
+	 * binds sharing a source */
+	int xfd = open("/mnt/b/x", O_PATH | O_CLOEXEC);
+	char fdlink[64], real[256];
+	snprintf(fdlink, sizeof fdlink, "/proc/self/fd/%d", xfd);
+	ssize_t rl = xfd < 0 ? -1 : readlink(fdlink, real, sizeof real - 1);
+	if (xfd >= 0) close(xfd);
+	if (rl <= 0) return 39;
+	real[rl] = 0;
+	if (strcmp(real, "/mnt/b/x")) return 29;
 	if (mount("/mnt/b", "/mnt/c", 0, MS_MOVE, 0) != 0) return 32;
 	if (exists("/mnt/b/x") || !exists("/mnt/c/x")) return 33;
 	if (umount2("/mnt/c", 0) != 0 || exists("/mnt/c/x")) return 34;
