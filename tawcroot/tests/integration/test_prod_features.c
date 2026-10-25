@@ -35,6 +35,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stddef.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -710,6 +711,32 @@ test(prod_init_status_ids)
 		"-r", FAKE_ROOTFS, "--init", "--", "/bin/static_init_check", "ids", NULL
 	};
 	test_int_eq(run_with(args), 42);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* An init session has its own abstract socket namespace: the host's
+ * names are out of reach and the guest's own can't collide with them. */
+test(prod_init_abstract_sockets)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+	char name[64];
+	snprintf(name, sizeof name, "tawcroot-test-abstract-%d", (int)getpid());
+	struct sockaddr_un sa;
+	memset(&sa, 0, sizeof sa);
+	sa.sun_family = AF_UNIX;
+	memcpy(sa.sun_path + 1, name, strlen(name));
+	int host = socket(AF_UNIX, SOCK_STREAM, 0);
+	test_true(host >= 0);
+	test_int_eq(bind(host, (struct sockaddr *)&sa,
+			 (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name))), 0);
+	test_int_eq(listen(host, 4), 0);
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--init", "--", "/bin/static_init_check", "abstract", name, NULL
+	};
+	int rc = run_with(args);
+	close(host);
+	test_int_eq(rc, 42);
 	rh_rmrf(FAKE_ROOTFS);
 }
 

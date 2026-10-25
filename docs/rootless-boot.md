@@ -72,9 +72,11 @@ boot, the dev loop in `boot-init.sh`:
   system_server on the lmkd socket. The real one needs PSI or memcg, both
   closed to apps (the host's lmkd manages the app as a whole); without
   any lmkd every oom-adj update stalls system_server for about 3 s.
-- Audio HAL: Waydroid's service is 32-bit only. `vine_hal_service`
+- Audio HAL: in 64_32 images Waydroid's service is 32-bit only. `vine_hal_service`
   (`rootless/hal_service.cpp`) registers the 64-bit passthrough
   implementations instead (audioserver and AudioService wait for them).
+  `waydroid_arm64_only` images ship a 64-bit service (and a 64-bit
+  mediaserver), which is kept.
 - No keychords: `vine-rootless.rc` overrides bugreport without its
   `keycodes`, else init opens the input FIFOs and blocks until the
   hwcomposer writes one. `/dev/input` starts empty each boot.
@@ -129,6 +131,11 @@ boot, the dev loop in `boot-init.sh`:
 - SO_PEERCRED reports the fake init as pid 1: init's property service
   took its own "restorecon done" set for a new request and looped
   forever, leaving vold (and system_server's unlock) waiting.
+- Abstract unix sockets are one namespace for every app: each guest
+  app's ADB-JDWP thread reached the host adbd's `@jdwp-control`, was
+  refused and reconnected at once, burning the phone's CPU (adbd plus
+  every guest app). An init session now prefixes its abstract names with
+  `tawc<init pid>.`, invisibly to the guest.
 - binderd freed a transaction's target node while the buffer still
   pointed at it (`free_buffer` then touched freed memory); a buffer now
   pins its target node.

@@ -132,8 +132,9 @@ def make_image(src, img, size_mb):
                    stdout=subprocess.DEVNULL)
 
 
-def build_images(top, inst):
+def build_images(top, inst, audio_hal_class=1):
     sysd = os.path.join(top, "sys")
+    shutil.rmtree(sysd, ignore_errors=True)
     for d in ("system/bin", "system/etc/init/hw", "system/apex/com.android.art/bin", "system/product/etc", "apex", "dev",
               "vendor", "proc", "sys", "data"):
         os.makedirs(os.path.join(sysd, d), exist_ok=True)
@@ -147,7 +148,10 @@ def build_images(top, inst):
     open(os.path.join(sysd, "init.environ.rc"), "w").write(
         "on early-init\n    export ANDROID_ROOT /system\n    export BOOTCLASSPATH /apex/a.jar:/apex/b.jar\n")
     vend = os.path.join(top, "vend")
+    shutil.rmtree(vend, ignore_errors=True)
     os.makedirs(os.path.join(vend, "bin/hw"), exist_ok=True)
+    with open(os.path.join(vend, "bin/hw/android.hardware.audio.service"), "wb") as f:
+        f.write(b"\x7fELF" + bytes([audio_hal_class]) + b"\0" * 59)  # ELFCLASS32 or 64
     open(os.path.join(vend, "build.prop"), "w").write("ro.vendor.product.cpu.abilist=arm64-v8a,armeabi-v7a\nro.vendor.x=1\n")
     make_image(sysd, os.path.join(inst, "system.img"), 16)
     make_image(vend, os.path.join(inst, "vendor.img"), 8)
@@ -356,6 +360,19 @@ def main():
     check(ev is not None and "init exited with 3" in ev[3], "init crash reported: " + str(ev))
     check(os.path.exists(marker), "no second extraction")
     os.unlink(os.path.join(W, "init-crash"))
+
+    print("[64-bit audio HAL kept]")
+    name64 = "fedcba98-4567-89ef-0123-456789abcdef"
+    inst64 = os.path.join(base, name64)
+    os.makedirs(inst64)
+    build_images(top, inst64, audio_hal_class=2)
+    ok, text = h.call("start", name64, inst64)
+    check(ok and h.wait_state(name64, "running") is not None, "64-bit image boots: " + text)
+    R64 = os.path.join(inst64, "rootless/rootfs")
+    check(not os.path.exists(os.path.join(R64, "vendor/bin/hw/vine_hal_service")), "no own audio HAL")
+    check("vine_hal_service" not in read(os.path.join(R64, "system/product/etc/init/vine-rootless.rc")), "rc keeps the image's")
+    ok, _ = h.call("stop", name64)
+    check(ok, "stop the 64-bit instance")
 
     print("[quit]")
     ok, _ = h.call("start", name, inst)

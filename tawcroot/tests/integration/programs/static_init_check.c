@@ -6,7 +6,9 @@
  * or `caps all`, checks the fake capability set instead; with `rlimit`,
  * that raising a hard limit past the host's clamps instead of failing;
  * with `ids`, that /proc/<pid>/status shows virtual Uid/Gid lines and
- * SO_PEERCRED shows init as pid 1.
+ * SO_PEERCRED shows init as pid 1; with `abstract NAME` (an abstract
+ * socket the host listens on), that the session has its own abstract
+ * namespace.
  *
  * Exit 42 on success; every other code names the failed step. pids go
  * through raw syscalls so libc caching can't hide the translation. */
@@ -14,10 +16,12 @@
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <linux/capability.h>
+#include <stddef.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -174,8 +178,39 @@ static int ids(void)
 	return e ? e : WEXITSTATUS(status) ? 10 + WEXITSTATUS(status) : 0;
 }
 
+static socklen_t abstract_addr(struct sockaddr_un *sa, const char *name)
+{
+	memset(sa, 0, sizeof *sa);
+	sa->sun_family = AF_UNIX;
+	size_t n = strlen(name);
+	memcpy(sa->sun_path + 1, name, n);
+	return (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + n);
+}
+
+static int abstract(const char *name)
+{
+	struct sockaddr_un sa, got;
+	socklen_t len = abstract_addr(&sa, name), glen = sizeof got;
+	int c = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (c < 0) return 1;
+	if (connect(c, (struct sockaddr *)&sa, len) == 0) return 2;  /* the host's */
+	close(c);
+	int s = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (s < 0 || bind(s, (struct sockaddr *)&sa, len) || listen(s, 1)) return 3;
+	if (getsockname(s, (struct sockaddr *)&got, &glen) || glen != len || memcmp(&got, &sa, len)) return 4;
+	c = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (c < 0 || connect(c, (struct sockaddr *)&sa, len)) return 5;
+	glen = sizeof got;
+	if (getpeername(c, (struct sockaddr *)&got, &glen) || glen != len || memcmp(&got, &sa, len)) return 6;
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
+	if (argc > 2 && !strcmp(argv[1], "abstract")) {
+		int e = abstract(argv[2]);
+		return e ? 90 + e : 42;
+	}
 	if (argc > 1 && !strcmp(argv[1], "ids")) {
 		int e = ids();
 		return e ? 80 + e : 42;

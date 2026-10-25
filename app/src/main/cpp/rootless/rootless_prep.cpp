@@ -118,6 +118,12 @@ std::string waydroid_prop(int dpi) {
            "waydroid.stub_sensors_hal=1\n";
 }
 
+// True for a 32-bit ELF file
+bool is_elf32(const std::string& path) {
+    const auto head = read_file_prefix(path, 5);
+    return head && head->size() == 5 && head->compare(0, 4, "\x7f" "ELF") == 0 && (*head)[4] == 1;
+}
+
 // 64-bit-only zygote: the 64_32 one without its 32-bit secondary
 std::string zygote64_rc(const std::string& zygote64_32) {
     const size_t at = zygote64_32.find("\nservice zygote_secondary");
@@ -246,7 +252,10 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // A host without AArch32 can't run the ROM's 32-bit ABIs: present it
     // as 64-bit only, like the host
     const std::string hal_service = o.lib_dir + "/libvine_hal_service.so";
-    const bool own_audio_hal = !o.host_has_32bit && is_regular_file(hal_service);
+    // Only for images whose audio HAL service is 32-bit (64_32 builds;
+    // waydroid_arm64_only ships a 64-bit one)
+    const bool own_audio_hal = !o.host_has_32bit && is_regular_file(hal_service) &&
+                               is_elf32(R + "/vendor/bin/hw/android.hardware.audio.service");
     if (!o.host_has_32bit) {
         for (const char* f : {"/system/build.prop", "/vendor/build.prop", "/vendor/odm/etc/build.prop"}) {
             const auto text = read_file(R + f);

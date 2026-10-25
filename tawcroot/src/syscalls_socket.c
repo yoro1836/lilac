@@ -402,6 +402,53 @@ static long render_parent_fd_path(char *dst, size_t cap, int base_fd,
 	return m;
 }
 
+/* Abstract sockets of an init session get their own namespace: the
+ * host's abstract names are shared with every app (an Android guest's
+ * apps would otherwise reach the host adbd's @jdwp-control and spin on
+ * its refusals), and two guests would see each other's. A session's
+ * names carry "tawc<init pid>." in front, the guest never sees it. */
+static size_t abstract_prefix(char *out, size_t cap)
+{
+	size_t pos = 0;
+	if (!tawcroot_namespace.init_pid) return 0;
+	if (tawc_str_append(out, cap, &pos, "tawc") < 0 ||
+	    tawc_str_append_dec(out, cap, &pos, tawcroot_namespace.init_pid) < 0 ||
+	    tawc_str_append(out, cap, &pos, ".") < 0)
+		return 0;
+	return pos;
+}
+
+/* Guest abstract name (path_bytes of sun_path, sun_path[0] == 0) into
+ * the session's namespace. 0 when not in an init session. */
+static long prefix_abstract(const struct tawc_sockaddr_un *in, long path_bytes,
+			    struct tawc_sockaddr_un *out, long *out_len)
+{
+	char pfx[32];
+	size_t pl = abstract_prefix(pfx, sizeof pfx);
+	if (!pl) return 0;
+	if (path_bytes - 1 + (long)pl + 1 > (long)sizeof out->sun_path)
+		return TAWC_ENAMETOOLONG;
+	out->sun_family = AF_UNIX_FAMILY;
+	out->sun_path[0] = '\0';
+	memcpy(out->sun_path + 1, pfx, pl);
+	memcpy(out->sun_path + 1 + pl, in->sun_path + 1, (size_t)path_bytes - 1);
+	*out_len = (long)sizeof(uint16_t) + 1 + (long)pl + path_bytes - 1;
+	return 1;
+}
+
+/* The reverse, in place, for addresses the kernel hands back */
+static void unprefix_abstract(struct tawc_sockaddr_un *addr, long *lenp)
+{
+	char pfx[32];
+	size_t pl = abstract_prefix(pfx, sizeof pfx);
+	long path_bytes = *lenp - (long)sizeof(uint16_t);
+	if (!pl || path_bytes < 1 + (long)pl || addr->sun_path[0] != '\0' ||
+	    memcmp(addr->sun_path + 1, pfx, pl) != 0)
+		return;
+	memmove(addr->sun_path + 1, addr->sun_path + 1 + pl, (size_t)path_bytes - 1 - pl);
+	*lenp -= (long)pl;
+}
+
 /* Build a translated sockaddr_un from a guest one. Reads `addrlen`
  * bytes of guest sockaddr at `guest_addr`, and if it's a pathname
  * AF_UNIX address, rewrites the path inside the rootfs view into
@@ -430,7 +477,8 @@ static long translate_unix_sockaddr(const void *guest_addr, long addrlen,
 
 	long path_bytes = addrlen - (long)sizeof(uint16_t);
 	if (path_bytes <= 0) return 0;            /* nameless / autobind */
-	if (un_in.sun_path[0] == '\0') return 0;  /* abstract socket */
+	if (un_in.sun_path[0] == '\0')            /* abstract socket */
+		return prefix_abstract(&un_in, path_bytes, un_out, out_len);
 
 	if (path_bytes > (long)sizeof un_in.sun_path)
 		path_bytes = sizeof un_in.sun_path;
@@ -564,7 +612,10 @@ static void reverse_translate_unix_sockaddr(struct tawc_sockaddr_un *kern_addr,
 	if (kern_addr->sun_family != AF_UNIX_FAMILY) return;
 	long path_bytes = klen - (long)sizeof(uint16_t);
 	if (path_bytes <= 0) return;
-	if (kern_addr->sun_path[0] == '\0') return;  /* abstract */
+	if (kern_addr->sun_path[0] == '\0') {  /* abstract */
+		unprefix_abstract(kern_addr, kern_lenp);
+		return;
+	}
 
 	if (path_bytes > (long)sizeof kern_addr->sun_path)
 		path_bytes = sizeof kern_addr->sun_path;
