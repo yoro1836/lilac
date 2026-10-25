@@ -57,15 +57,23 @@ bool create_vinefb(const std::string& path, uint32_t w, uint32_t h, std::string*
     hd.data_offset = vinefb::kHeaderSize;
     const uint32_t side = std::max(w, h);
     hd.capacity = side * side * 4;
-    const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+    // A new file renamed over the old one: a reader still mapping the old
+    // file (the app's display) must not see it shrink under it (SIGBUS)
+    const std::string tmp = path + ".new";
+    const int fd = ::open(tmp.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
     if (fd < 0) {
-        if (error) *error = "cannot create " + path + ": " + strerror(errno);
+        if (error) *error = "cannot create " + tmp + ": " + strerror(errno);
         return false;
     }
-    const bool ok = pwrite(fd, &hd, sizeof hd, 0) == (ssize_t)sizeof hd &&
-                    ftruncate(fd, (off_t)vinefb::kHeaderSize + hd.capacity) == 0;
-    if (!ok && error) *error = "cannot size " + path + ": " + strerror(errno);
+    bool ok = pwrite(fd, &hd, sizeof hd, 0) == (ssize_t)sizeof hd &&
+              ftruncate(fd, (off_t)vinefb::kHeaderSize + hd.capacity) == 0;
+    if (!ok && error) *error = "cannot size " + tmp + ": " + strerror(errno);
     ::close(fd);
+    if (ok && rename(tmp.c_str(), path.c_str()) != 0) {
+        ok = false;
+        if (error) *error = "cannot replace " + path + ": " + strerror(errno);
+    }
+    if (!ok) unlink(tmp.c_str());
     return ok;
 }
 

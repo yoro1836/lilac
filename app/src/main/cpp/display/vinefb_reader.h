@@ -30,6 +30,11 @@ public:
     void close();
     bool is_open() const { return base_ != nullptr; }
 
+    // True when the path now names another file than the one mapped (the
+    // writer replaced it, e.g. a guest restart); open() it again then
+    bool replaced() const;
+    const std::string& path() const { return path_; }
+
     // Current frame sequence number: 0 before the first frame, odd while the guest is writing, even when stable.
     uint32_t sequence() const;
 
@@ -45,6 +50,8 @@ private:
 
     void* base_ = nullptr;
     size_t size_ = 0;
+    std::string path_;
+    uint64_t dev_ = 0, ino_ = 0;
 };
 
 } // namespace vine::display

@@ -117,6 +117,28 @@ static void test_reader() {
     hd->magic = 0;
     CHECK(!r.header(&info), "bad magic accepted");
 
+    // The writer replaces the file (a guest restart): the old mapping stays
+    // readable, replaced() notices, and open() again sees the new one
+    hd->magic = kVineFbMagic;
+    CHECK(!r.replaced(), "replaced before any change");
+    std::string next = std::string(path) + ".next";
+    int nfd = open(next.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600);
+    VineFbHeader nh = *hd;
+    nh.width = 32;
+    nh.stride = 32 * 4;
+    CHECK(nfd >= 0 && pwrite(nfd, &nh, sizeof nh, 0) == (ssize_t)sizeof nh && ftruncate(nfd, kVineFbHeaderSize + cap) == 0,
+          "write the new file");
+    close(nfd);
+    CHECK(rename(next.c_str(), path) == 0, "rename");
+    CHECK(r.replaced(), "replacement noticed");
+    CHECK(r.header(&info) && info.width == w, "old mapping still readable");
+    CHECK(r.open(r.path(), &err) && r.header(&info) && info.width == 32, "reopened: %s", err.c_str());
+    CHECK(!r.replaced(), "replaced after reopening");
+    r.close();
+    CHECK(r.replaced(), "a closed reader with a file there reopens");
+    CHECK(r.open(path, &err), "reopen");
+    hd->width = w;
+
     VineFbReader missing;
     CHECK(!missing.open("/nonexistent/vinefb", &err) && !err.empty(), "missing file");
     r.close();

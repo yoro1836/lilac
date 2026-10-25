@@ -2,6 +2,7 @@
 #include "../utils/vine_log.h"
 
 #include <android/choreographer.h>
+#include <ctime>
 #include <android/looper.h>
 
 namespace vine::display {
@@ -10,6 +11,13 @@ namespace {
 constexpr int kWindowFormatRgba8888 = 1;
 constexpr int kIdleAfterFrames = 45;   // about 0.75 s of unchanged screen at 60 Hz
 constexpr int kIdlePollMs = 40;
+constexpr int64_t kReplaceCheckMs = 500;
+
+int64_t now_ms() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 }
 
 DisplayBridge::~DisplayBridge() { close(); }
@@ -34,6 +42,7 @@ void DisplayBridge::set_surface(ANativeWindow* window) {
 }
 
 DisplayBridge::Info DisplayBridge::info() const {
+    std::lock_guard<std::mutex> lock(window_mutex_);
     Info i;
     i.open = reader_.is_open();
     i.rendering = running_.load();
@@ -65,7 +74,20 @@ void DisplayBridge::loop() {
     ALooper_prepare(0);
     armed_ = false;
     idle_frames_ = 0;
+    int64_t checked = now_ms();
     while (running_.load()) {
+        if (now_ms() - checked >= kReplaceCheckMs) {
+            // The guest restarted and its display server made a new file
+            checked = now_ms();
+            std::lock_guard<std::mutex> lock(window_mutex_);
+            if (reader_.replaced()) {
+                const std::string path = reader_.path();
+                if (reader_.open(path, nullptr)) {
+                    last_seq_ = 0;
+                    force_redraw_.store(true);
+                }
+            }
+        }
         if (!armed_) {
             if (idle_frames_ < kIdleAfterFrames || reader_.sequence() != last_seq_ || force_redraw_.load()) {
                 idle_frames_ = 0;

@@ -148,6 +148,13 @@ boot, the dev loop in `boot-init.sh`:
   first change. A rewind (lseek, trapped on synthesized mount fds)
   now renders the table afresh and acknowledges the change, as the
   kernel does.
+- set*id privilege followed euid 0 only: webview_zygote is not root but
+  holds CAP_SETUID/CAP_SETGID (emulated) to move its children to
+  isolated uids, and every WebView aborted on `setresgid(99001)`.
+- llvmpipe's rasterizer threads now and then ran a shader whose JIT code
+  was already released (SEGV_ACCERR in `llvmpipe-N`, taking
+  SurfaceFlinger or SystemUI down); `vine-rootless.rc` exports
+  `LP_NUM_THREADS=0` so drawing threads rasterize themselves.
 - binderd freed a transaction's target node while the buffer still
   pointed at it (`free_buffer` then touched freed memory); a buffer now
   pins its target node.

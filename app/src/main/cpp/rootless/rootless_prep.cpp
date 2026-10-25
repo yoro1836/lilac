@@ -96,6 +96,13 @@ std::string rootless_rc(bool own_audio_hal) {
         "    oneshot\n"
         "    override\n"
         "\n"
+        // llvmpipe rasterizes in the drawing thread: with its own
+        // rasterizer threads, now and then one runs a shader whose JIT
+        // code was already released (SEGV_ACCERR in llvmpipe-N), which
+        // takes SurfaceFlinger or an app down
+        "on early-init\n"
+        "    export LP_NUM_THREADS 0\n"
+        "\n"
         // The engine's boot signal, in its /run/user/1000
         "on property:sys.boot_completed=1\n"
         "    write /run/user/1000/boot_completed 1\n";

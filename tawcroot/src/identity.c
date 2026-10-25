@@ -26,9 +26,10 @@
  * is shared) — same bounded-failure stance as the chroot globals.
  *
  * Syscall semantics follow the kernel's (kernel/sys.c), applied to the
- * virtual state, with privilege ⇔ euid == 0 standing in for
- * CAP_SETUID/CAP_SETGID ("fake root has all caps, others none" is the
- * whole capability model — capget/capset are not modeled further).
+ * virtual state. Privilege is euid == 0, or, where capabilities are
+ * emulated (init sessions, see namespace.c), CAP_SETUID/CAP_SETGID in
+ * the effective set: Android's webview_zygote is not root but holds
+ * them to switch its children to isolated uids.
  * On every e[ug]id change, fs[ug]id follows, as the kernel does.
  */
 
@@ -161,6 +162,15 @@ static struct id_view gid_view(tawc_identity *id)
 				 &id->fsgid };
 }
 
+/* CAP_SETUID (uid family) or CAP_SETGID (gid family) */
+static int privileged(const tawc_identity *id, int is_gid)
+{
+	if (id->euid == 0) return 1;
+	const struct tawc_namespace *ns = &tawcroot_namespace;
+	if (!ns->user && !(ns->session & TAWC_NS_INIT_SESSION)) return 0;
+	return (int)(ns->capabilities[0] >> (is_gid ? 6 : 7)) & 1;
+}
+
 /* setuid/setgid: privileged → r=e=s=v; unprivileged → allowed iff
  * v ∈ {r, s}, sets e only. fs follows e. (uid_t)-1 is EINVAL. */
 static long do_setid(uint32_t v, int is_gid)
@@ -170,7 +180,7 @@ static long do_setid(uint32_t v, int is_gid)
 	tawc_identity id = g_ident;
 	struct id_view w = is_gid ? gid_view(&id) : uid_view(&id);
 	long rv = 0;
-	if (id.euid == 0) {
+	if (privileged(&id, is_gid)) {
 		*w.r = *w.e = *w.s = v;
 	} else if (v == *w.r || v == *w.s) {
 		*w.e = v;
@@ -191,7 +201,7 @@ static long do_setreid(uint32_t r, uint32_t e, int is_gid)
 	uint32_t seq = ident_writer_acquire();
 	tawc_identity id = g_ident;
 	struct id_view w = is_gid ? gid_view(&id) : uid_view(&id);
-	int priv = id.euid == 0;
+	int priv = privileged(&id, is_gid);
 	uint32_t old_r = *w.r, old_e = *w.e, old_s = *w.s;
 	long rv = 0;
 	/* Validate BOTH ids before applying either: set*id calls are
@@ -220,7 +230,7 @@ static long do_setresid(uint32_t r, uint32_t e, uint32_t s, int is_gid)
 	uint32_t seq = ident_writer_acquire();
 	tawc_identity id = g_ident;
 	struct id_view w = is_gid ? gid_view(&id) : uid_view(&id);
-	int priv = id.euid == 0;
+	int priv = privileged(&id, is_gid);
 	uint32_t old_r = *w.r, old_e = *w.e, old_s = *w.s;
 	long rv = 0;
 	const uint32_t v[3] = { r, e, s };
@@ -251,7 +261,7 @@ static long do_setfsid(uint32_t v, int is_gid)
 	struct id_view w = is_gid ? gid_view(&id) : uid_view(&id);
 	uint32_t prev = *w.fs;
 	if (v != ID_KEEP &&
-	    (id.euid == 0 ||
+	    (privileged(&id, is_gid) ||
 	     v == *w.r || v == *w.e || v == *w.s || v == *w.fs))
 		*w.fs = v;
 	ident_writer_release(seq, &id);
@@ -307,7 +317,9 @@ static long handle_setgroups(const tawcroot_syscall_args *args, ucontext_t *uc)
 	 * unprivileged caller with a bad pointer gets EPERM, not EFAULT
 	 * (kernel order). The authoritative check re-runs under the
 	 * writer lock. */
-	if (tawcroot_identity_euid() != 0) return TAWC_EPERM;
+	tawc_identity cur;
+	tawcroot_identity_get(&cur);
+	if (!privileged(&cur, 1)) return TAWC_EPERM;
 	if (n > (int)TAWC_IDENTITY_NGROUPS) return TAWC_ENOMEM;
 	uint32_t local[TAWC_IDENTITY_NGROUPS];
 	uint32_t count = 0;
@@ -320,7 +332,7 @@ static long handle_setgroups(const tawcroot_syscall_args *args, ucontext_t *uc)
 	uint32_t seq = ident_writer_acquire();
 	tawc_identity id = g_ident;
 	long rv = 0;
-	if (id.euid != 0) {
+	if (!privileged(&id, 1)) {
 		rv = TAWC_EPERM;
 	} else {
 		id.ngroups = count;

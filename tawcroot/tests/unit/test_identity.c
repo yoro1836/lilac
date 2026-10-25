@@ -14,6 +14,7 @@
 #include "dispatch.h"
 #include "errno_neg.h"
 #include "identity.h"
+#include "namespace.h"
 #include "sysnr.h"
 
 static long ident_sys(TestCtx *test_ctx, long nr, long a, long b, long c)
@@ -57,6 +58,35 @@ test(identity_drop_is_irreversible)
 	test_int_eq((int)id.euid, 0);
 	test_int_eq((int)id.ngroups, 1);
 	test_int_eq((int)id.groups[0], 0);
+}
+
+/* Emulated capabilities (init sessions): a non-root holder of
+ * CAP_SETUID/CAP_SETGID switches ids freely, as webview_zygote does for
+ * isolated processes; without them the unprivileged rules apply. */
+test(identity_caps_grant_setid)
+{
+	tawcroot_dispatch_init();
+	tawcroot_identity_reset();
+	struct tawc_namespace saved = tawcroot_namespace;
+	tawcroot_namespace.session |= TAWC_NS_INIT_SESSION;
+	tawcroot_namespace.capabilities[0] = (1u << 6) | (1u << 7);   /* CAP_SETGID, CAP_SETUID */
+
+	test_int_eq((int)isys(TAWC_SYS_setresgid, 1053, 1053, 1053), 0);
+	test_int_eq((int)isys(TAWC_SYS_setresuid, 1053, 1053, 1053), 0);
+	test_int_eq((int)isys(TAWC_SYS_setresgid, 99001, 99001, 99001), 0);
+	test_int_eq((int)isys(TAWC_SYS_setgroups, 0, 0, 0), 0);
+	test_int_eq((int)isys(TAWC_SYS_setresuid, 99001, 99001, 99001), 0);
+	tawc_identity id;
+	tawcroot_identity_get(&id);
+	test_int_eq((int)id.euid, 99001);
+	test_int_eq((int)id.egid, 99001);
+
+	tawcroot_namespace.capabilities[0] = 0;
+	test_int_eq((int)isys(TAWC_SYS_setresuid, 1053, 1053, 1053), TAWC_EPERM);
+	test_int_eq((int)isys(TAWC_SYS_setgroups, 0, 0, 0), TAWC_EPERM);
+
+	tawcroot_namespace = saved;
+	tawcroot_identity_reset();
 }
 
 test(identity_setreuid_saved_id_rule)

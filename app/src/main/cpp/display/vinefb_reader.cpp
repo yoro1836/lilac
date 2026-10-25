@@ -34,7 +34,16 @@ bool VineFbReader::open(const std::string& path, std::string* error) {
     }
     base_ = map;
     size_ = (size_t)st.st_size;
+    path_ = path;
+    dev_ = (uint64_t)st.st_dev;
+    ino_ = (uint64_t)st.st_ino;
     return true;
+}
+
+bool VineFbReader::replaced() const {
+    struct stat st{};
+    if (path_.empty() || stat(path_.c_str(), &st) != 0) return false;
+    return !base_ || (uint64_t)st.st_dev != dev_ || (uint64_t)st.st_ino != ino_;
 }
 
 void VineFbReader::close() {
