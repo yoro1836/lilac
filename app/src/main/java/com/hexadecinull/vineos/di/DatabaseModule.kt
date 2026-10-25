@@ -18,6 +18,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): VineDatabase =
         Room.databaseBuilder(context, VineDatabase::class.java, VineDatabase.DATABASE_NAME)
+            .addMigrations(VineDatabase.MIGRATION_1_2)
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
 

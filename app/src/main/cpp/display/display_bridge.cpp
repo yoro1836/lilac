@@ -4,6 +4,7 @@
 #include <android/choreographer.h>
 #include <cstring>
 #include <ctime>
+#include <dlfcn.h>
 #include <android/looper.h>
 
 namespace vine::display {
@@ -12,12 +13,24 @@ namespace {
 constexpr int kWindowFormatRgba8888 = 1;
 constexpr int kIdleAfterFrames = 45;   // about 0.75 s of unchanged screen at 60 Hz
 constexpr int kIdlePollMs = 40;
+constexpr int kFreePollMs = 2;         // vsync off: how often a new frame is looked for
+constexpr int64_t kFreeIdleMs = 750;   // vsync off: unchanged for this long, poll slowly
 constexpr int64_t kReplaceCheckMs = 500;
 
 int64_t now_ms() {
     timespec ts{};
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// API 30, looked up at run time: minSdk is lower
+using SetFrameRate = int32_t (*)(ANativeWindow*, float, int8_t);
+SetFrameRate window_set_frame_rate() {
+    static const SetFrameRate f = [] {
+        void* lib = dlopen("libnativewindow.so", RTLD_NOW);
+        return lib ? reinterpret_cast<SetFrameRate>(dlsym(lib, "ANativeWindow_setFrameRate")) : nullptr;
+    }();
+    return f;
 }
 }
 
@@ -42,6 +55,19 @@ void DisplayBridge::set_surface(ANativeWindow* window) {
     force_redraw_.store(true);
     if (window_) ANativeWindow_acquire(window_);
     gpu_.set_window(window_);
+    apply_frame_rate();
+}
+
+void DisplayBridge::set_timing(int refresh_hz, bool vsync) {
+    vsync_.store(vsync);
+    std::lock_guard<std::mutex> lock(window_mutex_);
+    refresh_hz_ = refresh_hz;
+    apply_frame_rate();
+}
+
+void DisplayBridge::apply_frame_rate() {
+    gpu_.set_frame_rate((float)refresh_hz_);
+    if (window_ && window_set_frame_rate()) window_set_frame_rate()(window_, (float)refresh_hz_, 0);
 }
 
 DisplayBridge::Info DisplayBridge::info() const {
@@ -78,6 +104,7 @@ void DisplayBridge::loop() {
     armed_ = false;
     idle_frames_ = 0;
     int64_t checked = now_ms();
+    int64_t last_frame = 0;
     while (running_.load()) {
         if (now_ms() - checked >= kReplaceCheckMs) {
             // The guest restarted and its display server made a new file
@@ -91,6 +118,12 @@ void DisplayBridge::loop() {
                     gpu_.reset();
                 }
             }
+        }
+        if (!vsync_.load()) {
+            // A frame goes out as soon as it is seen
+            if (draw_if_changed()) last_frame = now_ms();
+            ALooper_pollOnce(now_ms() - last_frame < kFreeIdleMs ? kFreePollMs : kIdlePollMs, nullptr, nullptr, nullptr);
+            continue;
         }
         if (!armed_) {
             if (idle_frames_ < kIdleAfterFrames || reader_.sequence() != last_seq_ || force_redraw_.load()) {
@@ -109,7 +142,7 @@ void DisplayBridge::on_vsync(long, void* data) {
     if (!self->running_.load()) return;
     if (self->draw_if_changed()) self->idle_frames_ = 0;
     else ++self->idle_frames_;
-    if (self->idle_frames_ < kIdleAfterFrames) {
+    if (self->vsync_.load() && self->idle_frames_ < kIdleAfterFrames) {
         self->armed_ = true;
         AChoreographer_postFrameCallback(AChoreographer_getInstance(), &DisplayBridge::on_vsync, data);
     }

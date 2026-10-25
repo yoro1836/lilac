@@ -33,6 +33,7 @@ struct Api {
     void (*set_geometry)(ASurfaceTransaction*, ASurfaceControl*, const ARect*, const ARect*, int32_t);
     void (*set_visibility)(ASurfaceTransaction*, ASurfaceControl*, int8_t);
     void (*set_transparency)(ASurfaceTransaction*, ASurfaceControl*, int8_t);
+    void (*set_frame_rate)(ASurfaceTransaction*, ASurfaceControl*, float, int8_t); // API 30, may be null
     bool ok = false;
 };
 
@@ -51,6 +52,7 @@ const Api& api() {
                sym(x.set_geometry, "ASurfaceTransaction_setGeometry") &&
                sym(x.set_visibility, "ASurfaceTransaction_setVisibility") &&
                sym(x.set_transparency, "ASurfaceTransaction_setBufferTransparency");
+        sym(x.set_frame_rate, "ASurfaceTransaction_setFrameRate");
         return x;
     }();
     return a;
@@ -80,6 +82,12 @@ void GpuPresenter::set_window(ANativeWindow* window) {
     // The buffers stay cached: they belong to the guest, not the window
 }
 
+void GpuPresenter::set_frame_rate(float hz) {
+    if (hz == frame_rate_) return;
+    frame_rate_ = hz;
+    rate_dirty_ = true;
+}
+
 void GpuPresenter::hide() {
     if (!control_ || !shown_) return;
     const Api& a = api();
@@ -98,6 +106,7 @@ bool GpuPresenter::present(uint32_t resource, uint32_t width, uint32_t height) {
     if (!control_) {
         control_ = a.create_from_window(window_, "wayondroid-gpu");
         if (!control_) return false;
+        rate_dirty_ = true;
     }
     // Over the window's own buffer, which the caller keeps at the frame's
     // size: the child takes the parent's scaling to the view
@@ -107,6 +116,8 @@ bool GpuPresenter::present(uint32_t resource, uint32_t width, uint32_t height) {
     a.set_geometry(tx, control_, &rect, &rect, 0);
     a.set_transparency(tx, control_, kTransparencyOpaque);
     if (!shown_) a.set_visibility(tx, control_, kVisibilityShow);
+    if (rate_dirty_ && a.set_frame_rate && frame_rate_ > 0) a.set_frame_rate(tx, control_, frame_rate_, 0);
+    rate_dirty_ = false;
     a.tx_apply(tx);
     a.tx_delete(tx);
     shown_ = true;

@@ -7,6 +7,7 @@ import android.view.WindowManager
 import androidx.core.content.ContextCompat
 import com.hexadecinull.vineos.BuildConfig
 import com.hexadecinull.vineos.data.models.AbiCompat
+import com.hexadecinull.vineos.data.models.GuestResolution
 import com.hexadecinull.vineos.data.models.ROMImage
 import com.hexadecinull.vineos.data.models.VMInstance
 import com.hexadecinull.vineos.data.models.VMStatus
@@ -136,7 +137,8 @@ class VineVMManager @Inject constructor(
         val manifest = provisioner.readManifest(File(instance.storagePath))
         val needs32 = manifest.isArm32Only && !hostSupports32bit
         val (screenW, screenH) = deviceScreenSize()
-        val plan = DisplayPlanner.plan(screenW, screenH, prefs.screenFit.first(), prefs.guestResolution.first())
+        val quality = instance.resolution?.let(GuestResolution::fromName) ?: prefs.guestResolution.first()
+        val plan = DisplayPlanner.plan(screenW, screenH, prefs.screenFit.first(), quality)
         val reply = engine.request(
             "start",
             instance.id,
@@ -147,6 +149,7 @@ class VineVMManager @Inject constructor(
             "width=${plan.width}",
             "height=${plan.height}",
             "dpi=${plan.dpi}",
+            "refresh=${instance.refreshHz}",
             "network=${if (prefs.guestNetwork.first()) "nat" else "none"}",
             "graphics=${if (prefs.gpuAcceleration.first()) "gfxstream" else "cpu"}",
             "qemu32=${if (needs32) 1 else 0}",

@@ -1,5 +1,6 @@
 package com.hexadecinull.vineos.data.models
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import java.util.UUID
@@ -21,6 +22,10 @@ data class VMInstance(
     val androidVersionDisplay: String,
     val isRooted: Boolean = false,
     val iconEmoji: String = "🟢",
+    // The guest's screen: frames per second, a GuestResolution name (null follows the app setting) and vsync
+    @ColumnInfo(defaultValue = "60") val refreshHz: Int = 60,
+    val resolution: String? = null,
+    @ColumnInfo(defaultValue = "1") val vsync: Boolean = true,
 )
 
 enum class VMStatus {

@@ -9,6 +9,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.HighQuality
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -18,11 +21,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.hexadecinull.vineos.data.models.GuestResolution
+import com.hexadecinull.vineos.data.models.VMInstance
 import com.hexadecinull.vineos.data.models.VMStatus
 import com.hexadecinull.vineos.domain.StorageSizing
 import com.hexadecinull.vineos.helper.SnapshotInfo
@@ -43,6 +49,7 @@ fun InstanceDetailScreen(
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val snapshots by vm.snapshots.collectAsStateWithLifecycle()
+    val appResolution by vm.appResolution.collectAsStateWithLifecycle()
     val snackbarHost = remember { SnackbarHostState() }
     var showDiagnostics by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -135,6 +142,14 @@ fun InstanceDetailScreen(
                 }
             }
 
+            DisplaySection(
+                instance = instance,
+                appResolution = appResolution,
+                onRefreshHz = vm::setRefreshHz,
+                onResolution = vm::setResolution,
+                onVsync = vm::setVsync,
+            )
+
             SnapshotsSection(
                 state = snapshots,
                 running = instance.status != VMStatus.STOPPED && instance.status != VMStatus.ERROR,
@@ -193,6 +208,70 @@ private fun DetailRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, fontWeight = FontWeight.Medium)
+    }
+}
+
+private val FRAME_RATES = listOf(30, 60, 90, 120)
+
+// The rates the phone's screen can show, plus whatever the instance already has
+@Composable
+private fun frameRateOptions(current: Int): List<Int> {
+    val context = LocalContext.current
+    val maxHz = remember(context) {
+        val display = (context.getSystemService(android.content.Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager)
+            .getDisplay(android.view.Display.DEFAULT_DISPLAY)
+        display?.supportedModes?.maxOfOrNull { it.refreshRate } ?: 60f
+    }
+    return (FRAME_RATES.filter { it <= maxHz + 1 } + current).distinct().sorted()
+}
+
+@Composable
+private fun DisplaySection(
+    instance: VMInstance,
+    appResolution: GuestResolution,
+    onRefreshHz: (Int) -> Unit,
+    onResolution: (GuestResolution?) -> Unit,
+    onVsync: (Boolean) -> Unit,
+) {
+    Column {
+        Text("Display", style = MaterialTheme.typography.titleSmall)
+        ChoiceSettingsItem(
+            icon = Icons.Outlined.Speed,
+            title = "Frame rate",
+            options = frameRateOptions(instance.refreshHz),
+            selected = instance.refreshHz,
+            label = { "$it Hz" },
+            description = {
+                when {
+                    it < 60 -> "Saves battery, less smooth"
+                    it == 60 -> "The usual rate"
+                    else -> "Smoother, uses more power"
+                }
+            },
+            onSelect = onRefreshHz,
+        )
+        val resolutions = listOf<GuestResolution?>(null) + GuestResolution.entries
+        ChoiceSettingsItem(
+            icon = Icons.Outlined.HighQuality,
+            title = "Resolution",
+            options = resolutions,
+            selected = instance.resolution?.let(GuestResolution::fromName),
+            label = { it?.label ?: "App setting (${appResolution.label})" },
+            description = { it?.description ?: "Follows the resolution in Settings" },
+            onSelect = onResolution,
+        )
+        SwitchSettingsItem(
+            icon = Icons.Outlined.Sync,
+            title = "Vsync",
+            subtitle = "Show frames on the screen's refresh. Off shows them as they come: less lag, more battery.",
+            checked = instance.vsync,
+            onCheckedChange = onVsync,
+        )
+        Text(
+            "Frame rate and resolution apply the next time the instance starts, vsync when its screen opens.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

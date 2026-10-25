@@ -22,6 +22,7 @@ enum class ScreenFit(val label: String, val description: String) {
 }
 
 enum class GuestResolution(val label: String, val longSide: Int, val description: String) {
+    NATIVE("Phone's own", Int.MAX_VALUE, "Every pixel of your screen, the heaviest"),
     HIGH("High", 1920, "Sharpest picture, uses the most CPU"),
     BALANCED("Balanced", 1280, "Good picture, smoother on most phones"),
     LOW("Low", 960, "Fastest, softer picture"),

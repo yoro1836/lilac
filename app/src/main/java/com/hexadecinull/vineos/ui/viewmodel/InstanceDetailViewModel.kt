@@ -2,8 +2,10 @@ package com.hexadecinull.vineos.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.hexadecinull.vineos.data.models.GuestResolution
 import com.hexadecinull.vineos.data.models.VMInstance
 import com.hexadecinull.vineos.data.models.VMStatus
+import com.hexadecinull.vineos.data.repository.AppPreferences
 import com.hexadecinull.vineos.data.repository.InstanceRepository
 import com.hexadecinull.vineos.domain.VineVMManager
 import com.hexadecinull.vineos.helper.SnapshotInfo
@@ -26,8 +28,11 @@ data class InstanceDetailUiState(val instance: VMInstance? = null, val diagnosti
 data class SnapshotsUiState(val items: List<SnapshotInfo> = emptyList(), val busy: String? = null, val message: String? = null)
 
 @HiltViewModel
-class InstanceDetailViewModel @Inject constructor(private val instanceRepo: InstanceRepository, private val vmManager: VineVMManager) :
-    ViewModel() {
+class InstanceDetailViewModel @Inject constructor(
+    private val instanceRepo: InstanceRepository,
+    private val vmManager: VineVMManager,
+    prefs: AppPreferences,
+) : ViewModel() {
     private val instanceIdFlow = MutableStateFlow("")
     private val diagnosticsFlow = MutableStateFlow("")
 
@@ -42,6 +47,23 @@ class InstanceDetailViewModel @Inject constructor(private val instanceRepo: Inst
 
     fun load(id: String) {
         instanceIdFlow.value = id
+    }
+
+    // What an instance without its own resolution gets
+    val appResolution: StateFlow<GuestResolution> =
+        prefs.guestResolution.stateIn(viewModelScope, SharingStarted.Eagerly, GuestResolution.BALANCED)
+
+    fun setRefreshHz(hz: Int) = editInstance { it.copy(refreshHz = hz) }
+
+    fun setResolution(resolution: GuestResolution?) = editInstance { it.copy(resolution = resolution?.name) }
+
+    fun setVsync(on: Boolean) = editInstance { it.copy(vsync = on) }
+
+    private fun editInstance(change: (VMInstance) -> VMInstance) {
+        viewModelScope.launch {
+            val current = instanceRepo.getById(instanceIdFlow.value) ?: return@launch
+            instanceRepo.update(change(current))
+        }
     }
 
     fun launch(instance: VMInstance) {

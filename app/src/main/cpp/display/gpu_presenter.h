@@ -34,6 +34,8 @@ public:
     bool present(uint32_t resource, uint32_t width, uint32_t height);
     // Back to the window's own buffers
     void hide();
+    // Asks the display to run at the guest's rate (Android 11+)
+    void set_frame_rate(float hz);
     // The guest restarted: its GPU server and resource ids are new
     void reset();
 
@@ -47,6 +49,8 @@ private:
     ANativeWindow* window_ = nullptr;
     ASurfaceControl* control_ = nullptr;
     bool shown_ = false;
+    float frame_rate_ = 0;
+    bool rate_dirty_ = false;
     int sock_ = -1;
     int64_t retry_after_ms_ = 0;
     // Newest last; resource ids are never reused, so entries stay valid

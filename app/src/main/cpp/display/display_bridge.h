@@ -35,6 +35,11 @@ public:
     // Takes its own reference on the window; pass nullptr to detach.
     void set_surface(ANativeWindow* window);
 
+    // The guest's frame rate, which the phone's display is asked to match.
+    // Without vsync a frame is shown as soon as it arrives, not on the
+    // display's next refresh: less latency, more wakeups.
+    void set_timing(int refresh_hz, bool vsync);
+
     bool start();
     void stop();
 
@@ -44,6 +49,7 @@ private:
     void loop();
     bool draw_if_changed();
     static void on_vsync(long frame_time_nanos, void* data);
+    void apply_frame_rate(); // under window_mutex_
 
     VineFbReader reader_;
     GpuPresenter gpu_; // under window_mutex_
@@ -53,6 +59,8 @@ private:
     int window_h_ = 0;
     std::atomic<bool> force_redraw_{true};
     uint32_t last_seq_ = 0;
+    int refresh_hz_ = 60; // under window_mutex_
+    std::atomic<bool> vsync_{true};
 
     std::atomic<bool> running_{false};
     std::atomic<uint64_t> frames_drawn_{0};

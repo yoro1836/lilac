@@ -10,6 +10,8 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.hexadecinull.vineos.data.models.VMInstance
 import com.hexadecinull.vineos.data.models.VMStatus
 import kotlinx.coroutines.flow.Flow
@@ -58,7 +60,7 @@ interface VMInstanceDao {
 
 @Database(
     entities = [VMInstance::class],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 @TypeConverters(VineConverters::class)
@@ -67,5 +69,14 @@ abstract class VineDatabase : RoomDatabase() {
 
     companion object {
         const val DATABASE_NAME = "vineos.db"
+
+        // Per-instance display settings
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE vm_instances ADD COLUMN refreshHz INTEGER NOT NULL DEFAULT 60")
+                db.execSQL("ALTER TABLE vm_instances ADD COLUMN resolution TEXT")
+                db.execSQL("ALTER TABLE vm_instances ADD COLUMN vsync INTEGER NOT NULL DEFAULT 1")
+            }
+        }
     }
 }
