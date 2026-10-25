@@ -760,10 +760,50 @@ struct tawc_msghdr {
 	uint32_t _pad2;
 };
 
+#define SCM_CREDENTIALS_TYPE 2
+#define CRED_CONTROL_MAX 256
+
+/* SCM_CREDENTIALS must name the sender's kernel uid and gid, or the
+ * kernel refuses the send with EPERM (no CAP_SETUID here), but a guest
+ * fills in its virtual identity: libpulse's AUTH packet carries uid 0
+ * or audioserver's, and the connection dies before its first byte.
+ * Copies the control data into `buf` with the real uid/gid put in and
+ * repoints *mh at it; 0 when there is nothing to fix. The receiving
+ * side is left alone (see SO_PEERCRED below). */
+static int real_credentials(struct tawc_msghdr *mh, uint8_t *buf)
+{
+	const uint64_t n = mh->msg_controllen;
+	if (!mh->msg_control || n < 16 + 12 || n > CRED_CONTROL_MAX) return 0;
+	if (tawc_copy_from_guest(buf, (size_t)n, (const void *)(uintptr_t)mh->msg_control) < 0)
+		return 0;
+	int found = 0;
+	for (uint64_t off = 0; off + 16 <= n;) {
+		uint64_t len;
+		int32_t level, type;
+		memcpy(&len, buf + off, 8);
+		memcpy(&level, buf + off + 8, 4);
+		memcpy(&type, buf + off + 12, 4);
+		if (len < 16 || len > n - off) break;
+		if (level == SOL_SOCKET_LEVEL && type == SCM_CREDENTIALS_TYPE && len >= 16 + 12) {
+			/* struct ucred: pid, uid, gid, all checked by the kernel */
+			int32_t pid = (int32_t)TAWC_RAW(TAWC_SYS_getpid, 0, 0, 0, 0, 0, 0);
+			uint32_t uid = (uint32_t)TAWC_RAW(TAWC_SYS_getuid, 0, 0, 0, 0, 0, 0);
+			uint32_t gid = (uint32_t)TAWC_RAW(TAWC_SYS_getgid, 0, 0, 0, 0, 0, 0);
+			memcpy(buf + off + 16, &pid, 4);
+			memcpy(buf + off + 16 + 4, &uid, 4);
+			memcpy(buf + off + 16 + 8, &gid, 4);
+			found = 1;
+		}
+		off += (len + 7) & ~(uint64_t)7;
+	}
+	if (found) mh->msg_control = (uint64_t)(uintptr_t)buf;
+	return found;
+}
+
 /* sendmsg(fd, msghdr*, flags): the destination sockaddr lives in
  * msg_name. Copy the msghdr, translate msg_name into a stack-local
  * sockaddr, repoint, and re-issue. Same connectionless-client failure
- * mode as sendto. */
+ * mode as sendto. Credentials get the real uid/gid (real_credentials). */
 static long handle_sendmsg(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
@@ -779,8 +819,10 @@ static long handle_sendmsg(const tawcroot_syscall_args *args, ucontext_t *uc)
 	struct tawc_msghdr mh;
 	long e = tawc_copy_from_guest(&mh, sizeof mh, gmsg);
 	if (e < 0) return TAWC_EFAULT;
+	uint8_t control[CRED_CONTROL_MAX];
+	const int creds = real_credentials(&mh, control);
 	if (mh.msg_name == 0 || mh.msg_namelen == 0) {
-		return TAWC_RAW(TAWC_SYS_sendmsg, args->a, args->b, args->c,
+		return TAWC_RAW(TAWC_SYS_sendmsg, args->a, creds ? (long)&mh : args->b, args->c,
 				0, 0, 0);
 	}
 	if (to_netlink_stub((int)args->a, (const void *)(uintptr_t)mh.msg_name,
@@ -797,7 +839,7 @@ static long handle_sendmsg(const tawcroot_syscall_args *args, ucontext_t *uc)
 		&un_out, &new_addrlen, 0, &close_fd);
 	if (t < 0) return t;
 	if (t == 0) {
-		return TAWC_RAW(TAWC_SYS_sendmsg, args->a, args->b, args->c,
+		return TAWC_RAW(TAWC_SYS_sendmsg, args->a, creds ? (long)&mh : args->b, args->c,
 				0, 0, 0);
 	}
 	/* Repoint a COPY of the msghdr at our translated sockaddr; the
@@ -962,10 +1004,12 @@ _Static_assert(sizeof(struct tawc_ucred) == 12, "ucred ABI is 3 words");
  * unreachable from here) — same bounded stance as the rest of the
  * identity model.
  *
- * SCM_CREDENTIALS ancillary data is NOT given the same treatment: that
- * would mean trapping recvmsg, which the header comment above rules out
- * (hottest receive syscall; every Wayland/X11/dbus message). No known
- * workload authenticates that way; revisit if one does.
+ * Received SCM_CREDENTIALS ancillary data is NOT given the same
+ * treatment: that would mean trapping recvmsg, which the header comment
+ * above rules out (hottest receive syscall; every Wayland/X11/dbus
+ * message). No known workload authenticates that way; revisit if one
+ * does. Sent credentials are fixed up (real_credentials), or the kernel
+ * refuses them.
  *
  * Everything that isn't SO_PEERCRED forwards verbatim. The rewrite path
  * mirrors getname_with_reverse: issue the syscall into a local buffer,

@@ -102,7 +102,11 @@ std::string rootless_rc(bool own_audio_hal, bool gpu) {
         // code was already released (SEGV_ACCERR in llvmpipe-N), which
         // takes SurfaceFlinger or an app down
         "on early-init\n"
-        "    export LP_NUM_THREADS 0\n";
+        "    export LP_NUM_THREADS 0\n"
+        // The audio HAL's libpulse takes PULSE_RUNTIME_PATH only when it
+        // is its own and 0700, or it never connects to vine_pulse
+        "    chown audioserver audio /run/user/1000/pulse\n"
+        "    chmod 0700 /run/user/1000/pulse\n";
     if (gpu) {
         // gfxstream-vk talks to vine_kumquat over kumquat's socket
         rc += "    export VIRTGPU_KUMQUAT 1\n"
@@ -140,6 +144,9 @@ std::string waydroid_prop(int dpi, bool gpu) {
            "ro.hardware.egl=angle\n" +
            (gpu ? "ro.hardware.vulkan=gfxstream\nro.vendor.vine.gpu=1\nro.zygote.disable_gl_preload=true\n" : "ro.hardware.vulkan=lvp\n") +
            "sys.use_memfd=true\n"
+           // Codec2 takes linear buffers from DMA-BUF heaps, which apps
+           // can't open: gralloc blobs instead (ION | BUFFERQUEUE | BLOB)
+           "debug.stagefright.c2-poolmask=851968\n"
            "ro.opengles.version=196610\n"
            "ro.sf.lcd_density=" + std::to_string(dpi) + "\n"
            "waydroid.background_start=false\n"

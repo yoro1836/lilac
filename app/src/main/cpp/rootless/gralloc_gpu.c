@@ -41,6 +41,8 @@
 #define USAGE_SW_WRITE_MASK 0xf0u
 #define USAGE_HW_COMPOSER 0x800u
 #define USAGE_HW_FB 0x1000u
+/* texture, render, 2d, composer, fb, video encoder, GPU data buffer */
+#define USAGE_GPU_ANY (0xf00u | USAGE_HW_FB | 0x10000u | 0x1000000u)
 
 /* virgl formats and binds, as gfxstream reads them */
 #define VIRGL_B8G8R8A8 1
@@ -255,6 +257,10 @@ int vine_gpu_unregister(const void* handle) {
 
 static int transfer(cb_handle* cb, int to_host) {
     if (cb->format == FMT_BLOB) {
+        /* CPU-only blobs (Codec2's linear buffers) are plain shared
+         * memory: a reader may lock while the writer still holds its
+         * lock, and a transfer from the host would wipe the data */
+        if (!(cb->usage & USAGE_GPU_ANY)) return 0;
         uint32_t req[12] = {2, cb->hostHandle, (uint32_t)to_host, 0, 0, width_of(cb) * height_of(cb), 1, 0};
         return request(req, NULL, NULL);
     }

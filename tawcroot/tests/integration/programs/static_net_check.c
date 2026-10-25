@@ -1,7 +1,9 @@
 /* `tawcroot --init` hostname and privileged ports: sethostname shows in
  * uname, /proc/sys/kernel/hostname and a child; UDP and TCP services on
  * ports below 1024 bind, and their addresses read back unshifted; a
- * unix peer's SO_PEERCRED shows its virtual uid; capget's version probe.
+ * unix peer's SO_PEERCRED shows its virtual uid; capget's version probe;
+ * SCM_CREDENTIALS with the virtual identity in them go out (libpulse's
+ * AUTH; the kernel wants real ids).
  *
  * Exit 42 on success; every other code names the failed step. */
 
@@ -25,14 +27,14 @@ static volatile sig_atomic_t chld_seen;
 static void on_chld(int sig) { (void)sig; chld_seen = 1; }
 
 static struct sockaddr_in lo(int port)
-{
+	{
 	struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(port) };
 	a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	return a;
 }
 
 static int port_of(int fd, int peer)
-{
+	{
 	struct sockaddr_in a;
 	socklen_t n = sizeof a;
 	if ((peer ? getpeername : getsockname)(fd, (struct sockaddr *)&a, &n) != 0) return -1;
@@ -40,7 +42,7 @@ static int port_of(int fd, int peer)
 }
 
 int main(void)
-{
+	{
 	struct utsname u;
 	char buf[128];
 	if (sethostname("tawc-test", 9) != 0) return 1;
@@ -144,5 +146,24 @@ int main(void)
 	if (quick == 0) _exit(0);
 	pc = accept(us, 0, 0);
 	if (pc >= 0 || errno != EINTR || !chld_seen) return 53;
+
+	{
+		int sp[2], on = 1;
+		if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) != 0 ||
+		    setsockopt(sp[1], SOL_SOCKET, SO_PASSCRED, &on, sizeof on) != 0) return 54;
+		struct ucred cred = { getpid(), getuid(), getgid() };
+		union { char buf[CMSG_SPACE(sizeof cred)]; struct cmsghdr align; } ctl;
+		memset(&ctl, 0, sizeof ctl);
+		char byte = 'x';
+		struct iovec iov = { &byte, 1 };
+		struct msghdr mh = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctl.buf, .msg_controllen = sizeof ctl.buf };
+		struct cmsghdr *c = CMSG_FIRSTHDR(&mh);
+		c->cmsg_level = SOL_SOCKET;
+		c->cmsg_type = SCM_CREDENTIALS;
+		c->cmsg_len = CMSG_LEN(sizeof cred);
+		memcpy(CMSG_DATA(c), &cred, sizeof cred);
+		if (sendmsg(sp[0], &mh, 0) != 1) return 55;
+		if (read(sp[1], &byte, 1) != 1 || byte != 'x') return 56;
+	}
 	return 42;
 }
