@@ -16,6 +16,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <cerrno>
 #include <unistd.h>
 #include <vector>
 
@@ -100,8 +101,11 @@ void test_simple(const std::string& server, Tap& tap) {
     pa_simple_free(in);
 }
 
-void test_alsa(const std::string& server, Tap& tap) {
-    printf("[ALSA pulse plugin, as the HAL uses it]\n");
+// The device pulls `burst_ms` at a time; the HAL's buffer is 1024 frames
+// (21 ms), smaller than what AAudio pulls at once
+void test_alsa(const std::string& server, Tap& tap, unsigned buffer_frames, unsigned burst_ms) {
+    const bool underruns_ok = burst_ms * 48 > buffer_frames;
+    printf("[ALSA pulse plugin, as the HAL uses it: %u-frame buffer, %u ms pulls]\n", buffer_frames, burst_ms);
     tap.clear();
     setenv("PULSE_SERVER", server.c_str(), 1);
     snd_pcm_t* pcm = nullptr;
@@ -117,7 +121,7 @@ void test_alsa(const std::string& server, Tap& tap) {
     if (!r) r = snd_pcm_hw_params_set_rate_near(pcm, hw, &rate, nullptr);
     if (!r) r = snd_pcm_hw_params_set_channels(pcm, hw, 2);
     if (!r) r = snd_pcm_hw_params_set_periods(pcm, hw, 4, 0);
-    if (!r) r = snd_pcm_hw_params_set_buffer_size(pcm, hw, 4 * 1024);
+    if (!r) r = snd_pcm_hw_params_set_buffer_size(pcm, hw, buffer_frames);
     if (!r) r = snd_pcm_hw_params(pcm, hw);
     if (!r) r = snd_pcm_prepare(pcm);
     CHECK(r == 0, "hw params: %s", snd_strerror(r));
@@ -126,6 +130,11 @@ void test_alsa(const std::string& server, Tap& tap) {
     while (r == 0 && done < data.size() / 2) {
         const size_t n = std::min<size_t>(1024, data.size() / 2 - done);
         const snd_pcm_sframes_t w = snd_pcm_writei(pcm, data.data() + 2 * done, n);
+        if (w == -EPIPE && underruns_ok) {
+            // An underrun: the HAL prepares and writes on
+            r = snd_pcm_prepare(pcm);
+            continue;
+        }
         if (w < 0) {
             r = (int)w;
             break;
@@ -136,6 +145,7 @@ void test_alsa(const std::string& server, Tap& tap) {
     r = snd_pcm_drain(pcm);
     CHECK(r == 0, "drain: %s", snd_strerror(r));
     snd_pcm_close(pcm);
+    if (underruns_ok) return; // gaps: what came through is not one sequence
     const auto got = tap.audible();
     CHECK(same_samples(got, data), "played %zu bytes, wrote %zu, in order", got.size(), data.size() * 2);
 }
@@ -166,6 +176,7 @@ void test_alsa_capture(const std::string& server) {
 } // namespace
 
 int main() {
+    alarm(120); // a flow-control deadlock hangs instead of failing
     char tmpl[] = "/tmp/vine_pulse_test.XXXXXX";
     const std::string dir = mkdtemp(tmpl);
     const std::string path = dir + "/native";
@@ -177,7 +188,21 @@ int main() {
     std::thread th([&] { server.run(); });
     setenv("PULSE_CLIENTCONFIG", "/dev/null", 1); // no autospawn, no cookie lookups elsewhere
     test_simple("unix:" + path, tap);
-    test_alsa("unix:" + path, tap);
+    test_alsa("unix:" + path, tap, 4 * 1024, 10);
+    {
+        // A client that writes ahead of its grant, against big pulls: hung
+        // before the server granted back what it played
+        Tap burst_tap;
+        vine::pa::ClockBackend burst([&](const uint8_t* p, size_t n) { burst_tap.add(p, n); }, 40);
+        vine::pa::Server burst_server(&burst, nullptr);
+        const std::string burst_path = dir + "/burst";
+        CHECK(burst_server.listen(burst_path, &err), "listen: %s", err.c_str());
+        std::thread bth([&] { burst_server.run(); });
+        test_alsa("unix:" + burst_path, burst_tap, 1024, 40);
+        burst_server.stop();
+        bth.join();
+        unlink(burst_path.c_str());
+    }
     test_alsa_capture("unix:" + path);
     server.stop();
     th.join();

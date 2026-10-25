@@ -114,13 +114,19 @@ struct Playback {
     uint8_t channels = 0;
     uint8_t map[32] = {};
     uint32_t maxlength = 0, tlength = 0, prebuf = 0, minreq = 0;
-    int64_t requested = 0; // loop thread only: asked for, not yet received
+    uint64_t received = 0; // loop thread only: bytes the client sent
+    int peak = 0;          // loop thread only: loudest S16 sample, for the end-of-stream line
     std::vector<uint32_t> drain_tags;
 
     std::mutex mu;
     ByteQueue queue;
     int64_t write_index = 0, read_index = 0;
     uint64_t underrun_for = 0, playing_for = 0;
+    // Bytes played or dropped since the last REQUEST: what the client may
+    // send next. PulseAudio grants back what was consumed, whatever the
+    // client sent before, so a client writing ahead of its grant (the
+    // ALSA pulse plugin does) stays in step.
+    int64_t missing = 0;
     bool corked = false, prebuffering = true;
     bool started_event = false, underflow_event = false;
 
@@ -139,6 +145,7 @@ struct Playback {
                 got -= got % std::max<size_t>(frame_size(ss), 1);
                 queue.pop(dst, got);
                 read_index += (int64_t)got;
+                missing += (int64_t)got;
                 playing_for += got;
                 if (got < bytes) {
                     underrun_for += bytes - got;
@@ -186,6 +193,7 @@ class Connection {
 public:
     Connection(Server* server, int fd) : server_(server), fd_(fd) {}
     ~Connection() {
+        for (auto& [index, s] : playbacks_) ended(*s);
         playbacks_.clear();
         records_.clear();
         if (fd_ >= 0) close(fd_);
@@ -213,6 +221,15 @@ private:
         send_packet(w);
     }
     void create_playback(uint32_t tag, TagReader& r);
+    static bool trace() {
+        static const bool on = getenv("VINE_PULSE_TRACE") != nullptr;
+        return on;
+    }
+    // One line per playback stream: whether audio came at all
+    void ended(const Playback& s) {
+        server_->log("playback stream " + std::to_string(s.index) + " ended: " + std::to_string(s.received) +
+                     " bytes, peak " + std::to_string(s.peak));
+    }
     void create_record(uint32_t tag, TagReader& r);
     void playback_latency(uint32_t tag, TagReader& r);
     void record_latency(uint32_t tag, TagReader& r);
@@ -308,13 +325,20 @@ void Connection::memblock(const Descriptor& d, const uint8_t* p) {
         }
         s->queue.push(p, d.length);
         s->write_index += d.length;
+        s->received += d.length;
+        if (s->ss.format == kS16le) {
+            for (size_t i = 0; i + 1 < d.length; i += 2) {
+                const int v = std::abs((int)(int16_t)(p[i] | p[i + 1] << 8));
+                if (v > s->peak) s->peak = v;
+            }
+        }
         if (s->queue.size() > s->maxlength) {
             const size_t drop = s->queue.size() - s->maxlength;
             s->queue.pop(nullptr, drop);
             s->read_index += (int64_t)drop;
+            s->missing += (int64_t)drop;
         }
     }
-    s->requested = std::max<int64_t>(0, s->requested - d.length);
 }
 
 void Connection::service() {
@@ -340,12 +364,20 @@ void Connection::service() {
             if (version_ >= 23) w.s64(read_index);
             send_packet(w);
         }
-        const int64_t missing = (int64_t)s->tlength - queued - s->requested;
-        if (missing >= (int64_t)s->minreq) {
+        int64_t missing;
+        {
+            // Like pa_memblockq_pop_missing: at least minreq, or anything
+            // while prebuffering
+            std::lock_guard<std::mutex> lock(s->mu);
+            missing = s->missing;
+            if (missing > 0 && (missing >= (int64_t)s->minreq || s->prebuffering)) s->missing = 0;
+            else missing = 0;
+        }
+        if (missing > 0) {
+            if (trace()) server_->log("  request " + std::to_string(missing) + " on " + std::to_string(index));
             TagWriter w;
             w.u32(kRequest).u32(kInvalidIndex).u32(index).u32((uint32_t)missing);
             send_packet(w);
-            s->requested += missing;
         }
         if (!s->drain_tags.empty() && queued == 0) {
             for (uint32_t tag : s->drain_tags) ack(tag);
@@ -414,7 +446,6 @@ void Connection::create_playback(uint32_t tag, TagReader& r) {
         error(tag, kErrNoEntity);
         return;
     }
-    s->requested = s->tlength;
     TagWriter w = reply(tag);
     w.u32(s->index).u32(s->index).u32(s->tlength);
     w.u32(s->maxlength).u32(s->tlength).u32(s->prebuf).u32(s->minreq);
@@ -424,6 +455,10 @@ void Connection::create_playback(uint32_t tag, TagReader& r) {
     send_packet(w);
     server_->log("playback stream " + std::to_string(s->index) + ": " + std::to_string(s->ss.rate) + " Hz, " +
                  std::to_string(s->ss.channels) + " ch, format " + std::to_string(s->ss.format));
+    if (trace())
+        server_->log("  maxlength " + std::to_string(s->maxlength) + " tlength " + std::to_string(s->tlength) +
+                     " prebuf " + std::to_string(s->prebuf) + " minreq " + std::to_string(s->minreq) +
+                     (s->corked ? " corked" : ""));
     playbacks_[s->index] = std::move(s);
 }
 
@@ -519,8 +554,7 @@ void Connection::packet(const uint8_t* p, size_t n) {
         broken_ = true;
         return;
     }
-    static const bool trace = getenv("VINE_PULSE_TRACE") != nullptr;
-    if (trace) server_->log("command " + std::to_string(command));
+    if (trace()) server_->log("command " + std::to_string(command));
     if (command == kAuth) {
         uint32_t version;
         if (!r.u32(&version)) {
@@ -556,6 +590,9 @@ void Connection::packet(const uint8_t* p, size_t n) {
     case kDeletePlaybackStream:
     case kDeleteRecordStream:
         if (!r.u32(&index)) break;
+        if (command == kDeletePlaybackStream) {
+            if (Playback* s = playback(index)) ended(*s);
+        }
         if (command == kDeletePlaybackStream ? playbacks_.erase(index) : records_.erase(index)) ack(tag);
         else error(tag, kErrNoEntity);
         return;
@@ -584,9 +621,9 @@ void Connection::packet(const uint8_t* p, size_t n) {
         if (Playback* s = command == kFlushPlaybackStream ? playback(index) : nullptr) {
             std::lock_guard<std::mutex> lock(s->mu);
             s->write_index -= (int64_t)s->queue.size();
+            s->missing += (int64_t)s->queue.size();
             s->queue.clear();
             s->prebuffering = s->prebuf > 0;
-            s->requested = 0;
         } else if (Record* rs = command == kFlushRecordStream ? record(index) : nullptr) {
             std::lock_guard<std::mutex> lock(rs->mu);
             rs->read_index += (int64_t)rs->queue.size();
@@ -788,8 +825,8 @@ namespace {
 
 class ClockDevice : public Device {
 public:
-    ClockDevice(const SampleSpec& ss, std::function<void(uint8_t*, size_t)> tick)
-        : ss_(ss), tick_(std::move(tick)), thread_([this] { loop(); }) {}
+    ClockDevice(const SampleSpec& ss, unsigned period_ms, std::function<void(uint8_t*, size_t)> tick)
+        : ss_(ss), period_ms_(period_ms), tick_(std::move(tick)), thread_([this] { loop(); }) {}
     ~ClockDevice() override {
         {
             std::lock_guard<std::mutex> lock(mu_);
@@ -801,8 +838,8 @@ public:
 
 private:
     void loop() {
-        // 10 ms periods against a steady clock
-        const size_t frames = std::max<size_t>(ss_.rate / 100, 1);
+        // Periods against a steady clock
+        const size_t frames = std::max<size_t>((size_t)ss_.rate * period_ms_ / 1000, 1);
         std::vector<uint8_t> buf(frames * frame_size(ss_));
         auto next = std::chrono::steady_clock::now();
         std::unique_lock<std::mutex> lock(mu_);
@@ -815,6 +852,7 @@ private:
         }
     }
     SampleSpec ss_;
+    unsigned period_ms_;
     std::function<void(uint8_t*, size_t)> tick_;
     std::mutex mu_;
     std::condition_variable cv_;
@@ -826,14 +864,14 @@ private:
 
 std::unique_ptr<Device> ClockBackend::open_output(const SampleSpec& ss, Pull pull) {
     auto tap = tap_;
-    return std::make_unique<ClockDevice>(ss, [pull, tap](uint8_t* buf, size_t n) {
+    return std::make_unique<ClockDevice>(ss, period_ms_, [pull, tap](uint8_t* buf, size_t n) {
         pull(buf, n);
         if (tap) tap(buf, n);
     });
 }
 
 std::unique_ptr<Device> ClockBackend::open_input(const SampleSpec& ss, Push push) {
-    return std::make_unique<ClockDevice>(ss, [push, ss](uint8_t* buf, size_t n) {
+    return std::make_unique<ClockDevice>(ss, period_ms_, [push, ss](uint8_t* buf, size_t n) {
         memset(buf, ss.format == kU8 ? 0x80 : 0, n);
         push(buf, n);
     });

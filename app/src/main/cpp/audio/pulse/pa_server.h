@@ -38,13 +38,16 @@ public:
 // fallback when the host has no audio for a stream, and the tests' device.
 class ClockBackend : public Backend {
 public:
-    // Every pulled byte also goes to `tap` (tests), if set
-    explicit ClockBackend(std::function<void(const uint8_t*, size_t)> tap = nullptr) : tap_(std::move(tap)) {}
+    // Every pulled byte also goes to `tap` (tests), if set. A device pulls
+    // `period_ms` of audio at a time.
+    explicit ClockBackend(std::function<void(const uint8_t*, size_t)> tap = nullptr, unsigned period_ms = 10)
+        : tap_(std::move(tap)), period_ms_(period_ms) {}
     std::unique_ptr<Device> open_output(const SampleSpec& ss, Pull pull) override;
     std::unique_ptr<Device> open_input(const SampleSpec& ss, Push push) override;
 
 private:
     std::function<void(const uint8_t*, size_t)> tap_;
+    unsigned period_ms_;
 };
 
 class Connection;

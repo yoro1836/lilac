@@ -81,6 +81,9 @@ private:
         AAudioStreamBuilder_setChannelCount(b, ss_.channels);
         AAudioStreamBuilder_setFormat(b, aaudio_format(ss_.format));
         AAudioStreamBuilder_setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);
+        // Small bursts: the guest's HAL keeps only ~21 ms queued, and a
+        // pull bigger than that underruns it every time
+        if (!input_) AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
         AAudioStreamBuilder_setDataCallback(b, on_data, this);
         AAudioStreamBuilder_setErrorCallback(b, on_error, this);
         AAudioStream* s = nullptr;
