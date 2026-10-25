@@ -46,6 +46,10 @@ void VineFbSink::frame(const uint8_t* pixels, uint32_t w, uint32_t h, uint32_t s
     writer_.present(scratch_.data(), row);
 }
 
+void VineFbSink::gpu_frame(uint32_t resource, uint32_t w, uint32_t h, uint32_t format) {
+    if (writer_.is_open()) writer_.present_gpu(resource, w, h, format);
+}
+
 bool create_vinefb(const std::string& path, uint32_t w, uint32_t h, std::string* error) {
     vinefb::Header hd{};
     hd.magic = vinefb::kMagic;

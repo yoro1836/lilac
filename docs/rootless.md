@@ -48,6 +48,7 @@ Wayondroid app process (app uid)
      ├─ vine_wl: Wayland server on run/wayland-0 ──► shared/vinefb,
      │    input lines on <instance>/rootless/input
      ├─ vine_pulse: PulseAudio server on run/pulse/native
+     ├─ vine_kumquat (GPU setting on): gfxstream host renderer, see "GPU"
      └─ keeper (subreaper of every guest process)
           └─ tawcroot --init --all-caps --cgroup --owners -r <rootfs> … -- /system/bin/init second_stage
                └─ servicemanager, hwservicemanager, surfaceflinger,
@@ -152,6 +153,29 @@ to `/dev/binderfs` (`-b <dir>:/dev/binderfs`); it holds the `binder`,
 - To do: the helper's host API (register the `waydroid*` services, call
   `waydroidplatform`), and running real libbinder (servicemanager) on a
   device.
+
+## GPU (graphics=gfxstream)
+
+The "GPU acceleration" setting runs the guest's Vulkan on the phone's
+GPU. Built by `scripts/gpu/build-gpu.sh` (staged in jniLibs).
+
+- **Guest:** Mesa's gfxstream-vk (`vulkan.gfxstream.so`, patches in
+  `deps/mesa-patches/mesa`) talks kumquat to `vine_kumquat`; ANGLE runs
+  GLES on it. `gralloc.vine` (`rootless/gralloc_gpu.c`) allocates host
+  ColorBuffers on the `vine-gralloc` socket and hands out goldfish
+  `cb_handle_t`s whose host handle is the resource id.
+- **Host:** `vine_kumquat` (`gpu/kumquat`) is rutabaga's kumquat server
+  over `libgfxstream_backend.so`, plus the gralloc service
+  (`deps/rutabaga-patches`) and an AHardwareBuffer socket.
+- **Frames, no copies:** with `ro.hardware.gralloc=vine` the
+  hwcomposer sends each buffer's handle over `android_wlegl`; vine_wl
+  writes its resource id into the vinefb header (`gpu_resource`);
+  DisplayBridge asks vine_kumquat for that ColorBuffer's AHB once
+  (abstract socket `gpu_ahb_socket()`, `tawc_gfxstream_lookup_ahb`) and
+  shows it on a child SurfaceControl of the view's window
+  (`display/gpu_presenter.cpp`, Android 10+). vine_wl releases a buffer
+  when the next one replaces it; there is no fence between the guest's
+  next render and the host compositor, so tearing is possible.
 
 ## Ownership store
 

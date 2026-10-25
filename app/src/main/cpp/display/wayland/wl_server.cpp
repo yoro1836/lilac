@@ -17,7 +17,7 @@ namespace vine::wl {
 namespace {
 
 // Global names in the registry, and what each one binds
-enum Global : uint32_t { G_COMPOSITOR = 1, G_SHM, G_WM_BASE, G_OUTPUT, G_SEAT, G_COUNT };
+enum Global : uint32_t { G_COMPOSITOR = 1, G_SHM, G_WM_BASE, G_OUTPUT, G_SEAT, G_WLEGL, G_COUNT };
 
 struct GlobalInfo {
     const char* interface;
@@ -30,6 +30,7 @@ const GlobalInfo kGlobals[G_COUNT] = {
     {"xdg_wm_base", 1},
     {"wl_output", 3},
     {"wl_seat", 5},
+    {"android_wlegl", 1},
 };
 
 constexpr uint32_t kDisplayId = 1;
@@ -63,6 +64,15 @@ struct Msg {
         return v;
     }
     int32_t i32() { return (int32_t)u32(); }
+    std::vector<int32_t> ints() {
+        const uint32_t len = u32();
+        const uint32_t padded = (len + 3) & ~3u;
+        if (!ok || len % 4 || (size_t)(end - p) < padded) { ok = false; return {}; }
+        std::vector<int32_t> v(len / 4);
+        memcpy(v.data(), p, len);
+        p += padded;
+        return v;
+    }
     std::string str() {
         const uint32_t len = u32();
         if (!ok || len == 0) return {};
@@ -254,6 +264,13 @@ struct Buffer : Object {
     std::shared_ptr<PoolMem> mem;
     int32_t offset = 0, width = 0, height = 0, stride = 0;
     uint32_t format = 0;
+    // android_wlegl: a host GPU resource, its handle's fds held while the
+    // buffer lives (one of them keeps the resource alive)
+    uint32_t gpu_resource = 0;
+    std::vector<int> fds;
+    ~Buffer() override {
+        for (int f : fds) close(f);
+    }
     void request(Msg& m) override {
         if (m.opcode == 0) client->destroy(id);
     }
@@ -321,11 +338,80 @@ struct Shm : Object {
     }
 };
 
+// android_wlegl: the hwcomposer sends each gralloc buffer's native
+// handle. The guest's GPU gralloc (gralloc_gpu.c) makes goldfish
+// cb_handle_t ones, whose host handle is the GPU resource id.
+constexpr uint32_t kCbMagic = 0xABFABF05u;
+constexpr size_t kCbInts = 17, kCbMagicInt = 7, kCbHostHandleInt = 8;
+
+struct WleglHandle : Object {
+    int32_t num_fds = 0;
+    std::vector<int32_t> ints;
+    std::vector<int> fds;
+    ~WleglHandle() override {
+        for (int f : fds) close(f);
+    }
+    void request(Msg& m) override {
+        if (m.opcode == 0) { // add_fd
+            const int f = m.fd();
+            if (!m.ok) return;
+            if ((int32_t)fds.size() >= num_fds) {
+                close(f);
+                client->error(id, 0, "too many fds");
+                return;
+            }
+            fds.push_back(f);
+        } else if (m.opcode == 1) {
+            client->destroy(id);
+        }
+    }
+};
+
+struct Wlegl : Object {
+    void request(Msg& m) override {
+        if (m.opcode == 0) { // create_handle
+            const uint32_t nid = m.u32();
+            const int32_t num_fds = m.i32();
+            std::vector<int32_t> ints = m.ints();
+            if (!m.ok) return;
+            if (num_fds < 0 || num_fds > 4) {
+                client->error(id, 1, "bad fd count");
+                return;
+            }
+            if (WleglHandle* h = client->add<WleglHandle>(nid, 1)) {
+                h->num_fds = num_fds;
+                h->ints = std::move(ints);
+            }
+        } else if (m.opcode == 1) { // create_buffer
+            const uint32_t nid = m.u32();
+            const int32_t w = m.i32(), h = m.i32(), stride = m.i32(), format = m.i32();
+            m.i32(); // usage
+            WleglHandle* handle = client->get<WleglHandle>(m.u32());
+            if (!m.ok) return;
+            if (!handle || (int32_t)handle->fds.size() != handle->num_fds || handle->ints.size() < kCbInts ||
+                (uint32_t)handle->ints[kCbMagicInt] != kCbMagic || handle->ints[kCbHostHandleInt] == 0) {
+                client->error(id, 0, "not a GPU gralloc buffer");
+                return;
+            }
+            if (Buffer* b = client->add<Buffer>(nid, 1)) {
+                b->width = w;
+                b->height = h;
+                b->stride = stride;
+                b->format = (uint32_t)format;
+                b->gpu_resource = (uint32_t)handle->ints[kCbHostHandleInt];
+                b->fds = std::move(handle->fds);
+                handle->fds.clear();
+            }
+        }
+    }
+};
+
 struct XdgSurface;
 struct Toplevel;
 
 struct Surface : Object {
     uint32_t pending_buffer = 0;
+    uint32_t held_buffer = 0; // a GPU buffer the host may still be showing
     bool pending_attach = false;
     std::vector<uint32_t> pending_frames;
     XdgSurface* xdg = nullptr;
@@ -415,13 +501,25 @@ void Surface::commit() {
         pending_attach = false;
         Buffer* b = pending_buffer ? client->get<Buffer>(pending_buffer) : nullptr;
         if (b && xdg && xdg->toplevel) {
-            if (const uint8_t* px = b->pixels()) {
+            if (b->gpu_resource) {
+                client->server()->sink()->gpu_frame(b->gpu_resource, (uint32_t)b->width, (uint32_t)b->height, b->format);
+                client->count_frame();
+            } else if (const uint8_t* px = b->pixels()) {
                 client->server()->sink()->frame(px, (uint32_t)b->width, (uint32_t)b->height, (uint32_t)b->stride, b->format);
                 client->count_frame();
             }
         }
-        // The pixels are copied, the client may reuse the buffer right away
-        if (b) client->event(b->id, 0);
+        // Pixels are copied, the client may reuse the buffer right away. A
+        // GPU buffer is shown as it is: it goes back once the next frame
+        // replaces it.
+        if (held_buffer && (!b || held_buffer != b->id)) {
+            if (client->get<Buffer>(held_buffer)) client->event(held_buffer, 0);
+            held_buffer = 0;
+        }
+        if (b) {
+            if (b->gpu_resource) held_buffer = b->id;
+            else client->event(b->id, 0);
+        }
     }
     const uint32_t t = now_ms();
     for (uint32_t cb : pending_frames)
@@ -563,6 +661,7 @@ struct Registry : Object {
         case G_SEAT:
             if (Seat* s = client->add<Seat>(nid, want)) s->announce();
             break;
+        case G_WLEGL: client->add<Wlegl>(nid, want); break;
         }
     }
     void announce() {

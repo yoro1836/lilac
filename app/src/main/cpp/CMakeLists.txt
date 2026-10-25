@@ -70,8 +70,9 @@ target_link_libraries(vine_core PUBLIC ${log-lib} ${z-lib})
 add_library(vine_runtime SHARED
     vine_runtime.cpp
     display/display_bridge.cpp
+    display/gpu_presenter.cpp
 )
-target_link_libraries(vine_runtime PRIVATE vine_core ${android-lib})
+target_link_libraries(vine_runtime PRIVATE vine_core ${android-lib} nativewindow dl)
 target_link_options(vine_runtime PRIVATE -Wl,-z,max-page-size=16384)
 
 # Run as root via su (or as the app for the rootless engine), named lib*.so so Android extracts it to the native library directory

@@ -80,6 +80,9 @@ bool VineFbReader::header(FrameInfo* info) const {
         info->format = (VineFbFormat)h.format;
         info->frame_seq = h.frame_seq;
         info->frame_count = h.frame_count;
+        info->gpu_resource = h.gpu_resource;
+        info->gpu_width = h.gpu_width;
+        info->gpu_height = h.gpu_height;
     }
     return true;
 }

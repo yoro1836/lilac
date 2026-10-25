@@ -17,6 +17,7 @@ public:
     uint32_t width() const override { return writer_.width(); }
     uint32_t height() const override { return writer_.height(); }
     void frame(const uint8_t* pixels, uint32_t w, uint32_t h, uint32_t stride, uint32_t shm_format) override;
+    void gpu_frame(uint32_t resource, uint32_t w, uint32_t h, uint32_t format) override;
 
 private:
     vinefb::Writer writer_;

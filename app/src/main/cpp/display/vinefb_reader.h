@@ -15,6 +15,10 @@ struct FrameInfo {
     VineFbFormat format = VineFbFormat::RGBA_8888;
     uint32_t frame_seq = 0;
     uint32_t frame_count = 0;
+    // Nonzero: the frame is this host GPU resource (vinefb.h)
+    uint32_t gpu_resource = 0;
+    uint32_t gpu_width = 0;
+    uint32_t gpu_height = 0;
 };
 
 // Maps the vinefb file read-only and returns tear-free copies of the newest frame

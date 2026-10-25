@@ -2,6 +2,7 @@
 #include "../utils/vine_log.h"
 
 #include <android/choreographer.h>
+#include <cstring>
 #include <ctime>
 #include <android/looper.h>
 
@@ -23,6 +24,7 @@ int64_t now_ms() {
 DisplayBridge::~DisplayBridge() { close(); }
 
 bool DisplayBridge::open(const std::string& vinefb_path, std::string* error) {
+    gpu_.set_vinefb(vinefb_path);
     return reader_.open(vinefb_path, error);
 }
 
@@ -39,6 +41,7 @@ void DisplayBridge::set_surface(ANativeWindow* window) {
     window_w_ = window_h_ = 0; // geometry is applied again on the next frame
     force_redraw_.store(true);
     if (window_) ANativeWindow_acquire(window_);
+    gpu_.set_window(window_);
 }
 
 DisplayBridge::Info DisplayBridge::info() const {
@@ -85,6 +88,7 @@ void DisplayBridge::loop() {
                 if (reader_.open(path, nullptr)) {
                     last_seq_ = 0;
                     force_redraw_.store(true);
+                    gpu_.reset();
                 }
             }
         }
@@ -121,6 +125,32 @@ bool DisplayBridge::draw_if_changed() {
 
     FrameInfo hdr;
     if (!reader_.header(&hdr)) return false;
+    if (hdr.gpu_resource && GpuPresenter::supported()) {
+        // The frame stays on the GPU and goes to a surface control over
+        // the window. A black window buffer of the frame's size underneath
+        // gives both the view's scaling.
+        if ((int)hdr.gpu_width != window_w_ || (int)hdr.gpu_height != window_h_) {
+            if (ANativeWindow_setBuffersGeometry(window_, (int32_t)hdr.gpu_width, (int32_t)hdr.gpu_height,
+                                                 kWindowFormatRgba8888) != 0)
+                return false;
+            ANativeWindow_Buffer buf{};
+            if (ANativeWindow_lock(window_, &buf, nullptr) != 0) return false;
+            memset(buf.bits, 0, (size_t)buf.stride * 4 * (size_t)buf.height);
+            ANativeWindow_unlockAndPost(window_);
+            window_w_ = (int)hdr.gpu_width;
+            window_h_ = (int)hdr.gpu_height;
+        }
+        if (reader_.sequence() != seq) return false; // replaced while read, the next vsync gets it
+        if (!gpu_.present(hdr.gpu_resource, hdr.gpu_width, hdr.gpu_height)) {
+            force_redraw_.store(true);
+            return false;
+        }
+        last_seq_ = seq;
+        force_redraw_.store(false);
+        frames_drawn_.fetch_add(1);
+        return true;
+    }
+    gpu_.hide();
     if ((int)hdr.width != window_w_ || (int)hdr.height != window_h_) {
         if (ANativeWindow_setBuffersGeometry(window_, (int32_t)hdr.width, (int32_t)hdr.height, kWindowFormatRgba8888) != 0) {
             VINE_LOGW("display: cannot set %ux%u on the surface", hdr.width, hdr.height);

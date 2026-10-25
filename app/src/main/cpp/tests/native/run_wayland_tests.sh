@@ -10,7 +10,10 @@ xml="$(pkg-config --variable=pkgdatadir wayland-protocols)/stable/xdg-shell/xdg-
 wayland-scanner client-header "$xml" "$out/xdg-shell-client-protocol.h"
 wayland-scanner private-code "$xml" "$out/xdg-shell-protocol.c"
 gcc -c "$out/xdg-shell-protocol.c" -o "$out/xdg-shell-protocol.o"
+wayland-scanner client-header "$here/android_wlegl.xml" "$out/android-wlegl-client-protocol.h"
+wayland-scanner private-code "$here/android_wlegl.xml" "$out/android-wlegl-protocol.c"
+gcc -c "$out/android-wlegl-protocol.c" -o "$out/android-wlegl-protocol.o"
 g++ -std=c++17 -O1 -g -Wall -Wextra -Wshadow -fsanitize=address,undefined -I"$out" -I"$cpp/../../../../rom/hwc" \
     "$here/test_wayland.cpp" "$cpp/display/wayland/wl_server.cpp" "$cpp/display/wayland/vinefb_sink.cpp" "$cpp/display/wayland/input_lines.cpp" \
-    "$out/xdg-shell-protocol.o" -lwayland-client -lpthread -o "$out/test_wayland"
+    "$out/xdg-shell-protocol.o" "$out/android-wlegl-protocol.o" -lwayland-client -lpthread -o "$out/test_wayland"
 "$out/test_wayland"

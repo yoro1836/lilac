@@ -1,5 +1,6 @@
 #include "rootless_instance.h"
 #include "../utils/vine_utils.h"
+#include "../display/vinefb.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -310,7 +311,8 @@ bool Instance::launch_services(std::string* error) {
     pulse_pid_ = spawn({lib + "libvine_pulse.so", "--socket", "run/pulse/native"}, W, layout_.logs + "/vine_pulse.log");
     // The guest's GPU and gralloc service, its sockets in /run/user/1000
     if (cfg_.gpu) {
-        kumquat_pid_ = spawn({lib + "libvine_kumquat.so", "kumquat-gpu-0", "vine-gralloc"}, layout_.run,
+        kumquat_pid_ = spawn({lib + "libvine_kumquat.so", "kumquat-gpu-0", "vine-gralloc",
+                              vine::display::gpu_ahb_socket(layout_.vinefb)}, layout_.run,
                              layout_.logs + "/vine_kumquat.log");
     }
     if (binderd_pid_ < 0 || wl_pid_ < 0 || pulse_pid_ < 0 || (cfg_.gpu && kumquat_pid_ < 0)) {

@@ -130,11 +130,13 @@ std::string rootless_rc(bool own_audio_hal, bool gpu) {
 
 // What Waydroid's host writes with no GPU device: software GLES (ANGLE on
 // lavapipe) over memfd-backed gralloc buffers. With the GPU, ANGLE runs
-// on gfxstream-vk and gralloc hands out host ColorBuffers; zygote must
-// not preload the driver, or its kumquat socket leaks into every fork
-// and zygote's fd check aborts.
+// on gfxstream-vk and gralloc hands out host ColorBuffers. gralloc "vine"
+// (not "default") makes the hwcomposer pass buffers on by handle over
+// android_wlegl, so frames stay on the GPU. zygote must not preload the
+// driver, or its kumquat socket leaks into every fork and zygote's fd
+// check aborts.
 std::string waydroid_prop(int dpi, bool gpu) {
-    return std::string("ro.hardware.gralloc=default\n") +
+    return std::string(gpu ? "ro.hardware.gralloc=vine\n" : "ro.hardware.gralloc=default\n") +
            "ro.hardware.egl=angle\n" +
            (gpu ? "ro.hardware.vulkan=gfxstream\nro.vendor.vine.gpu=1\nro.zygote.disable_gl_preload=true\n" : "ro.hardware.vulkan=lvp\n") +
            "sys.use_memfd=true\n"
@@ -442,7 +444,8 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     const std::string product_init = R + "/system/product/etc/init";
     if (!mkdirs_or_fail(product_init, error) || !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal, o.gpu), 0644, error)) return false;
     if (!write_mode(R + "/vendor/waydroid.prop", waydroid_prop(o.dpi, o.gpu), 0644, error)) return false;
-    if (o.gpu && !copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error))
+    if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error) ||
+                  !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.vine.so", 0644, error)))
         return false;
 
     // A first boot has no app ops recorded, and LineageOS 20's SystemUI

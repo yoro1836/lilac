@@ -15,7 +15,8 @@
 // xdg_toplevel, and the server hands those pixels to a FrameSink.
 //
 // Globals: wl_compositor 4, wl_shm 1, xdg_wm_base 1, wl_output 3,
-// wl_seat 5 (touch and keyboard). No subcompositor or viewporter, so the
+// wl_seat 5 (touch and keyboard), android_wlegl 1 (GPU gralloc buffers,
+// passed on as resource ids). No subcompositor or viewporter, so the
 // client keeps to the single-surface path.
 //
 // Input comes in as the guest agent's lines (input_lines.h) on a second
@@ -36,6 +37,8 @@ public:
     virtual uint32_t height() const = 0;
     // One committed buffer, valid only during the call
     virtual void frame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t stride, uint32_t shm_format) = 0;
+    // One committed buffer that is a host GPU resource (Android HAL format)
+    virtual void gpu_frame(uint32_t /*resource*/, uint32_t /*width*/, uint32_t /*height*/, uint32_t /*format*/) {}
 };
 
 class Client;

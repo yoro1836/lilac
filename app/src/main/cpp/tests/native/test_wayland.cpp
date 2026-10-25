@@ -3,10 +3,12 @@
 // open a maximized xdg_toplevel, wait for its configure, calibrate with a
 // 1x1 buffer, then post full-size shm frames with frame callbacks.
 // Then touches and keys through the input socket, as the app sends them.
-// Also checks the input line parser and the vinefb sink's pixel formats.
+// Also checks android_wlegl GPU buffers, the input line parser and the
+// vinefb sink's pixel formats.
 #include "../../display/wayland/vinefb_sink.h"
 #include "../../display/wayland/wl_server.h"
 
+#include "android-wlegl-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include <wayland-client.h>
 
@@ -50,7 +52,14 @@ struct MemSink : vine::wl::FrameSink {
         last_px.assign(px + (size_t)(h - 1) * stride + (w - 1) * 4, px + (size_t)(h - 1) * stride + w * 4);
         ++count;
     }
-    uint32_t last_w = 0, last_h = 0, last_format = 0, count = 0;
+    void gpu_frame(uint32_t resource, uint32_t w, uint32_t h, uint32_t format) override {
+        gpu_resource = resource;
+        last_w = w;
+        last_h = h;
+        last_format = format;
+        ++gpu_count;
+    }
+    uint32_t last_w = 0, last_h = 0, last_format = 0, count = 0, gpu_resource = 0, gpu_count = 0;
     std::vector<uint8_t> first, last_px;
 };
 
@@ -61,6 +70,7 @@ struct Client {
     xdg_wm_base* wm_base = nullptr;
     wl_output* output = nullptr;
     wl_seat* seat = nullptr;
+    android_wlegl* wlegl = nullptr;
     bool has_abgr = false;
     int32_t mode_w = 0, mode_h = 0;
     int32_t conf_w = 0, conf_h = 0;
@@ -80,6 +90,7 @@ void global(void* data, wl_registry* reg, uint32_t name, const char* iface, uint
     else if (i == "xdg_wm_base") c->wm_base = (xdg_wm_base*)wl_registry_bind(reg, name, &xdg_wm_base_interface, 1);
     else if (i == "wl_output") c->output = (wl_output*)wl_registry_bind(reg, name, &wl_output_interface, std::min(version, 3u));
     else if (i == "wl_seat") c->seat = (wl_seat*)wl_registry_bind(reg, name, &wl_seat_interface, std::min(version, 5u));
+    else if (i == "android_wlegl") c->wlegl = (android_wlegl*)wl_registry_bind(reg, name, &android_wlegl_interface, 1);
 }
 void global_remove(void*, wl_registry*, uint32_t) {}
 const wl_registry_listener registry_listener = {global, global_remove};
@@ -332,6 +343,7 @@ void test_session(const std::string& dir) {
     wl_surface_destroy(surf);
     wl_display_roundtrip(c.display);
     CHECK(wl_display_get_error(c.display) == 0, "no protocol error (%d)", wl_display_get_error(c.display));
+    if (c.wlegl) android_wlegl_destroy(c.wlegl);
     wl_seat_destroy(c.seat);
     wl_output_destroy(c.output);
     xdg_wm_base_destroy(c.wm_base);
@@ -340,6 +352,92 @@ void test_session(const std::string& dir) {
     wl_registry_destroy(reg);
     wl_display_disconnect(c.display);
 
+    server.stop();
+    th.join();
+}
+
+// A GPU gralloc buffer as the hwcomposer sends it: two fds and a
+// cb_handle_t's 17 ints, magic at 7 and the resource id at 8
+wl_buffer* gpu_buffer(Client& c, uint32_t resource) {
+    std::vector<int32_t> ints(17, 0);
+    ints[7] = (int32_t)0xABFABF05u;
+    ints[8] = (int32_t)resource;
+    wl_array arr;
+    wl_array_init(&arr);
+    memcpy(wl_array_add(&arr, ints.size() * 4), ints.data(), ints.size() * 4);
+    android_wlegl_handle* h = android_wlegl_create_handle(c.wlegl, 2, &arr);
+    wl_array_release(&arr);
+    for (int i = 0; i < 2; ++i) {
+        const int fd = memfd(4096);
+        android_wlegl_handle_add_fd(h, fd);
+        close(fd);
+    }
+    wl_buffer* b = android_wlegl_create_buffer(c.wlegl, (int32_t)W, (int32_t)H, (int32_t)W, 1, 0x300, h);
+    android_wlegl_handle_destroy(h);
+    return b;
+}
+
+void test_wlegl(const std::string& dir) {
+    printf("[android_wlegl GPU buffers]\n");
+    MemSink sink;
+    vine::wl::Server server(&sink, nullptr);
+    std::string err;
+    CHECK(server.listen(dir + "/wayland-1", &err), "listen: %s", err.c_str());
+    std::thread th([&] { server.run(); });
+    setenv("XDG_RUNTIME_DIR", dir.c_str(), 1);
+    Client c;
+    c.display = wl_display_connect("wayland-1");
+    CHECK(c.display, "connect");
+    if (!c.display) {
+        server.stop();
+        th.join();
+        return;
+    }
+    wl_registry* reg = wl_display_get_registry(c.display);
+    wl_registry_add_listener(reg, &registry_listener, &c);
+    wl_display_roundtrip(c.display);
+    CHECK(c.wlegl != nullptr, "android_wlegl advertised");
+    xdg_wm_base_add_listener(c.wm_base, &wm_listener, &c);
+    wl_surface* surf = wl_compositor_create_surface(c.compositor);
+    xdg_surface* xs = xdg_wm_base_get_xdg_surface(c.wm_base, surf);
+    xdg_surface_add_listener(xs, &xs_listener, &c);
+    xdg_toplevel* tl = xdg_surface_get_toplevel(xs);
+    xdg_toplevel_add_listener(tl, &tl_listener, &c);
+    wl_surface_commit(surf);
+    pump(c.display, [&] { return c.configured; });
+
+    wl_buffer* a = gpu_buffer(c, 42);
+    wl_buffer* b = gpu_buffer(c, 43);
+    wl_buffer_add_listener(a, &buf_listener, &c);
+    wl_buffer_add_listener(b, &buf_listener, &c);
+    wl_surface_attach(surf, a, 0, 0);
+    wl_surface_commit(surf);
+    wl_display_roundtrip(c.display);
+    CHECK(sink.gpu_count == 1 && sink.gpu_resource == 42 && sink.last_w == W && sink.last_format == 1,
+          "GPU frame passed on (%u frames, resource %u)", sink.gpu_count, sink.gpu_resource);
+    CHECK(c.releases == 0, "buffer held while shown");
+    wl_surface_attach(surf, b, 0, 0);
+    wl_surface_commit(surf);
+    wl_display_roundtrip(c.display);
+    CHECK(sink.gpu_count == 2 && sink.gpu_resource == 43, "second GPU frame (resource %u)", sink.gpu_resource);
+    CHECK(c.releases == 1, "previous buffer released (%d)", c.releases);
+    CHECK(sink.count == 0, "no pixel frames");
+    CHECK(wl_display_get_error(c.display) == 0, "no protocol error (%d)", wl_display_get_error(c.display));
+
+    wl_buffer_destroy(a);
+    wl_buffer_destroy(b);
+    xdg_toplevel_destroy(tl);
+    xdg_surface_destroy(xs);
+    wl_surface_destroy(surf);
+    wl_display_roundtrip(c.display);
+    android_wlegl_destroy(c.wlegl);
+    wl_seat_destroy(c.seat);
+    wl_output_destroy(c.output);
+    xdg_wm_base_destroy(c.wm_base);
+    wl_shm_destroy(c.shm);
+    wl_compositor_destroy(c.compositor);
+    wl_registry_destroy(reg);
+    wl_display_disconnect(c.display);
     server.stop();
     th.join();
 }
@@ -410,6 +508,7 @@ int main() {
     char tmpl[] = "/tmp/vine_wl_test.XXXXXX";
     const std::string dir = mkdtemp(tmpl);
     test_session(dir);
+    test_wlegl(dir);
     test_lines();
     test_sink(dir);
     rmdir(dir.c_str());

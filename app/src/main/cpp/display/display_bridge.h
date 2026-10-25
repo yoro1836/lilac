@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gpu_presenter.h"
 #include "vinefb_reader.h"
 
 #include <android/native_window.h>
@@ -45,6 +46,7 @@ private:
     static void on_vsync(long frame_time_nanos, void* data);
 
     VineFbReader reader_;
+    GpuPresenter gpu_; // under window_mutex_
     mutable std::mutex window_mutex_;
     ANativeWindow* window_ = nullptr;
     int window_w_ = 0;
