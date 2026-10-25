@@ -23,7 +23,10 @@ struct Header {
     // gfxstream ColorBuffer, gpu_format an Android HAL format), not the
     // pixels at data_offset
     uint32_t gpu_resource, gpu_width, gpu_height, gpu_format;
-    uint32_t reserved[2];
+    // Written by the host: frame_seq of the newest gpu_resource frame on
+    // screen. Older GPU buffers are free to draw into again.
+    uint32_t host_shown_seq;
+    uint32_t reserved;
 };
 static_assert(sizeof(Header) == 64, "Header is part of the guest ABI");
 
@@ -66,6 +69,8 @@ public:
     uint32_t width() const { return header()->width; }
     uint32_t height() const { return header()->height; }
     uint32_t format() const { return header()->format; }
+    uint32_t frame_seq() const { return __atomic_load_n(&header()->frame_seq, __ATOMIC_RELAXED); }
+    uint32_t host_shown_seq() const { return __atomic_load_n(&header()->host_shown_seq, __ATOMIC_ACQUIRE); }
 
     // Publishes one full frame, src_stride in bytes, a reader never sees a half-written frame
     bool present(const void* pixels, uint32_t src_stride) {

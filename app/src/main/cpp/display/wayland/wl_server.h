@@ -39,6 +39,11 @@ public:
     virtual void frame(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t stride, uint32_t shm_format) = 0;
     // One committed buffer that is a host GPU resource (Android HAL format)
     virtual void gpu_frame(uint32_t /*resource*/, uint32_t /*width*/, uint32_t /*height*/, uint32_t /*format*/) {}
+    // The host shows GPU buffers as they are, so one goes back to the
+    // client only once the host shows a later frame. gpu_seq() names the
+    // last gpu_frame; a sink without a host frees replaced buffers at once.
+    virtual uint32_t gpu_seq() const { return 0; }
+    virtual bool gpu_shown_after(uint32_t /*seq*/) const { return true; }
 };
 
 class Client;

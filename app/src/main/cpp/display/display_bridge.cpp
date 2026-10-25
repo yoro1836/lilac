@@ -174,7 +174,7 @@ bool DisplayBridge::draw_if_changed() {
             window_h_ = (int)hdr.gpu_height;
         }
         if (reader_.sequence() != seq) return false; // replaced while read, the next vsync gets it
-        if (!gpu_.present(hdr.gpu_resource, hdr.gpu_width, hdr.gpu_height)) {
+        if (!gpu_.present(hdr.gpu_resource, hdr.gpu_width, hdr.gpu_height, seq)) {
             force_redraw_.store(true);
             return false;
         }

@@ -36,6 +36,10 @@ const GlobalInfo kGlobals[G_COUNT] = {
 constexpr uint32_t kDisplayId = 1;
 constexpr size_t kMaxMessage = 4096;
 constexpr size_t kMaxFds = 28;
+// A replaced GPU buffer goes back after this long even if the host never
+// said it moved on (no display attached)
+constexpr uint32_t kHoldMaxMs = 100;
+constexpr int kHoldPollMs = 2;
 
 uint32_t now_ms() {
     timespec ts{};
@@ -213,6 +217,14 @@ public:
         return f;
     }
 
+    // A GPU buffer committed on a surface stays with the host (gpu_shown_after)
+    void hold(uint32_t surface, uint32_t buffer, uint32_t seq);
+    // The surface's buffers no longer include the newest one shown
+    void supersede(uint32_t surface);
+    void drop_held(uint32_t buffer);
+    // Releases the buffers the host is done with; true while some wait
+    bool release_held(uint32_t now);
+
     // The mapped toplevel's surface id, 0 if none
     uint32_t toplevel_surface() const;
     // Seat events for this client's touch and keyboard objects
@@ -233,10 +245,57 @@ private:
     std::deque<int> in_fds_;
     std::vector<uint8_t> out_;
     std::vector<int> out_fds_;
+    struct Held {
+        uint32_t surface, buffer, seq;
+        bool newest;       // the surface's current buffer, never released early
+        uint32_t since_ms; // when it stopped being the newest
+    };
+    std::vector<Held> held_;
     std::unordered_map<uint32_t, std::unique_ptr<Object>> objects_;
     std::vector<uint32_t> dead_;
     bool broken_ = false;
 };
+
+void Client::hold(uint32_t surface, uint32_t buffer, uint32_t seq) {
+    supersede(surface);
+    drop_held(buffer); // committed again
+    held_.push_back({surface, buffer, seq, true, 0});
+}
+
+void Client::supersede(uint32_t surface) {
+    const uint32_t now = now_ms();
+    for (Held& h : held_) {
+        if (h.surface == surface && h.newest) {
+            h.newest = false;
+            h.since_ms = now;
+        }
+    }
+}
+
+void Client::drop_held(uint32_t buffer) {
+    for (size_t i = 0; i < held_.size(); ++i) {
+        if (held_[i].buffer == buffer) {
+            held_.erase(held_.begin() + (ptrdiff_t)i);
+            return;
+        }
+    }
+}
+
+bool Client::release_held(uint32_t now) {
+    const FrameSink* sink = server_->sink();
+    bool waiting = false;
+    for (size_t i = 0; i < held_.size();) {
+        const Held& h = held_[i];
+        if (!h.newest && (sink->gpu_shown_after(h.seq) || now - h.since_ms >= kHoldMaxMs)) {
+            event(h.buffer, 0);
+            held_.erase(held_.begin() + (ptrdiff_t)i);
+        } else {
+            waiting |= !h.newest;
+            ++i;
+        }
+    }
+    return waiting;
+}
 
 int Msg::fd() {
     const int f = client->take_fd();
@@ -269,6 +328,7 @@ struct Buffer : Object {
     uint32_t gpu_resource = 0;
     std::vector<int> fds;
     ~Buffer() override {
+        client->drop_held(id); // the id may come back as another buffer
         for (int f : fds) close(f);
     }
     void request(Msg& m) override {
@@ -411,7 +471,6 @@ struct Toplevel;
 
 struct Surface : Object {
     uint32_t pending_buffer = 0;
-    uint32_t held_buffer = 0; // a GPU buffer the host may still be showing
     bool pending_attach = false;
     std::vector<uint32_t> pending_frames;
     XdgSurface* xdg = nullptr;
@@ -451,6 +510,7 @@ struct XdgSurface : Object {
 // Each side forgets the other when either goes away first
 Surface::~Surface() {
     if (xdg) xdg->surface = nullptr;
+    client->supersede(id);
 }
 Toplevel::~Toplevel() {
     if (xdg) xdg->toplevel = nullptr;
@@ -499,10 +559,13 @@ void Surface::commit() {
     }
     if (pending_attach) {
         pending_attach = false;
+        uint32_t seq = 0;
         Buffer* b = pending_buffer ? client->get<Buffer>(pending_buffer) : nullptr;
         if (b && xdg && xdg->toplevel) {
             if (b->gpu_resource) {
-                client->server()->sink()->gpu_frame(b->gpu_resource, (uint32_t)b->width, (uint32_t)b->height, b->format);
+                FrameSink* sink = client->server()->sink();
+                sink->gpu_frame(b->gpu_resource, (uint32_t)b->width, (uint32_t)b->height, b->format);
+                seq = sink->gpu_seq();
                 client->count_frame();
             } else if (const uint8_t* px = b->pixels()) {
                 client->server()->sink()->frame(px, (uint32_t)b->width, (uint32_t)b->height, (uint32_t)b->stride, b->format);
@@ -510,16 +573,12 @@ void Surface::commit() {
             }
         }
         // Pixels are copied, the client may reuse the buffer right away. A
-        // GPU buffer is shown as it is: it goes back once the next frame
-        // replaces it.
-        if (held_buffer && (!b || held_buffer != b->id)) {
-            if (client->get<Buffer>(held_buffer)) client->event(held_buffer, 0);
-            held_buffer = 0;
-        }
-        if (b) {
-            if (b->gpu_resource) held_buffer = b->id;
-            else client->event(b->id, 0);
-        }
+        // GPU buffer is shown as it is: it goes back once the host shows a
+        // later frame, or the client would draw into what is on screen.
+        if (b && b->gpu_resource) client->hold(id, b->id, seq);
+        else client->supersede(id);
+        if (b && !b->gpu_resource) client->event(b->id, 0);
+        client->release_held(now_ms());
     }
     const uint32_t t = now_ms();
     for (uint32_t cb : pending_frames)
@@ -925,6 +984,9 @@ bool Server::inject(const InputEvent& e) {
 
 bool Server::run() {
     for (;;) {
+        bool holding = false;
+        const uint32_t now = now_ms();
+        for (auto& c : clients_) holding |= c->release_held(now);
         std::vector<pollfd> pfds;
         pfds.push_back({wake_[0], POLLIN, 0});
         pfds.push_back({listen_fd_, POLLIN, 0});
@@ -932,7 +994,7 @@ bool Server::run() {
         for (auto& in : inputs_) pfds.push_back({in.fd, POLLIN, 0});
         const size_t first_client = pfds.size();
         for (auto& c : clients_) pfds.push_back({c->fd(), (short)(POLLIN | (c->wants_write() ? POLLOUT : 0)), 0});
-        if (poll(pfds.data(), pfds.size(), -1) < 0) {
+        if (poll(pfds.data(), pfds.size(), holding ? kHoldPollMs : -1) < 0) {
             if (errno == EINTR) continue;
             return false;
         }

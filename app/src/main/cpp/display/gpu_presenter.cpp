@@ -7,12 +7,15 @@
 #include <cstring>
 #include <ctime>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <mutex>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <type_traits>
 #include <unistd.h>
 
 struct ASurfaceTransaction;
+struct ASurfaceTransactionStats;
 
 namespace vine::display {
 
@@ -34,6 +37,7 @@ struct Api {
     void (*set_visibility)(ASurfaceTransaction*, ASurfaceControl*, int8_t);
     void (*set_transparency)(ASurfaceTransaction*, ASurfaceControl*, int8_t);
     void (*set_frame_rate)(ASurfaceTransaction*, ASurfaceControl*, float, int8_t); // API 30, may be null
+    void (*set_on_complete)(ASurfaceTransaction*, void*, void (*)(void*, ASurfaceTransactionStats*));
     bool ok = false;
 };
 
@@ -51,7 +55,8 @@ const Api& api() {
                sym(x.tx_apply, "ASurfaceTransaction_apply") && sym(x.set_buffer, "ASurfaceTransaction_setBuffer") &&
                sym(x.set_geometry, "ASurfaceTransaction_setGeometry") &&
                sym(x.set_visibility, "ASurfaceTransaction_setVisibility") &&
-               sym(x.set_transparency, "ASurfaceTransaction_setBufferTransparency");
+               sym(x.set_transparency, "ASurfaceTransaction_setBufferTransparency") &&
+               sym(x.set_on_complete, "ASurfaceTransaction_setOnComplete");
         sym(x.set_frame_rate, "ASurfaceTransaction_setFrameRate");
         return x;
     }();
@@ -65,6 +70,47 @@ int64_t now_ms() {
 }
 
 } // namespace
+
+// Writes vinefb's host_shown_seq once a frame is on screen: the guest
+// draws into an older buffer only then. Transactions finish on a binder
+// thread, maybe after the presenter is gone.
+class GpuPresenter::ShownAck {
+public:
+    explicit ShownAck(const std::string& path) : fd_(open(path.c_str(), O_WRONLY | O_CLOEXEC)) {}
+    ~ShownAck() {
+        if (fd_ >= 0) close(fd_);
+    }
+    void shown(uint32_t seq) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (fd_ < 0 || (have_ && (int32_t)(seq - last_) <= 0)) return;
+        have_ = true;
+        last_ = seq;
+        (void)!pwrite(fd_, &seq, sizeof seq, offsetof(VineFbHeader, host_shown_seq));
+    }
+
+private:
+    std::mutex mu_;
+    int fd_;
+    bool have_ = false;
+    uint32_t last_ = 0;
+};
+
+namespace {
+struct Pending {
+    std::shared_ptr<GpuPresenter::ShownAck> ack;
+    uint32_t seq;
+};
+void on_complete(void* data, ASurfaceTransactionStats*) {
+    auto* p = static_cast<Pending*>(data);
+    p->ack->shown(p->seq);
+    delete p;
+}
+} // namespace
+
+void GpuPresenter::set_vinefb(const std::string& path) {
+    vinefb_path_ = path;
+    ack_ = std::make_shared<ShownAck>(path);
+}
 
 GpuPresenter::~GpuPresenter() {
     set_window(nullptr);
@@ -98,7 +144,7 @@ void GpuPresenter::hide() {
     shown_ = false;
 }
 
-bool GpuPresenter::present(uint32_t resource, uint32_t width, uint32_t height) {
+bool GpuPresenter::present(uint32_t resource, uint32_t width, uint32_t height, uint32_t seq) {
     const Api& a = api();
     if (!a.ok || !window_ || !resource || !width || !height) return false;
     AHardwareBuffer* ahb = buffer(resource);
@@ -118,6 +164,7 @@ bool GpuPresenter::present(uint32_t resource, uint32_t width, uint32_t height) {
     if (!shown_) a.set_visibility(tx, control_, kVisibilityShow);
     if (rate_dirty_ && a.set_frame_rate && frame_rate_ > 0) a.set_frame_rate(tx, control_, frame_rate_, 0);
     rate_dirty_ = false;
+    if (ack_) a.set_on_complete(tx, new Pending{ack_, seq}, on_complete);
     a.tx_apply(tx);
     a.tx_delete(tx);
     shown_ = true;
@@ -173,7 +220,10 @@ bool GpuPresenter::connect() {
     return true;
 }
 
-void GpuPresenter::reset() { disconnect(); }
+void GpuPresenter::reset() {
+    disconnect();
+    if (!vinefb_path_.empty()) set_vinefb(vinefb_path_); // a new file
+}
 
 void GpuPresenter::disconnect() {
     if (sock_ >= 0) close(sock_);

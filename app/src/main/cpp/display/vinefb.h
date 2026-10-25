@@ -37,7 +37,10 @@ struct VineFbHeader {
     uint32_t gpu_width;
     uint32_t gpu_height;
     uint32_t gpu_format;
-    uint32_t reserved[2];
+    // Written by the host: frame_seq of the newest gpu_resource frame on
+    // screen. Older GPU buffers are free for the guest to draw into again.
+    uint32_t host_shown_seq;
+    uint32_t reserved;
 };
 
 static_assert(sizeof(VineFbHeader) == 64, "VineFbHeader is part of the guest ABI");

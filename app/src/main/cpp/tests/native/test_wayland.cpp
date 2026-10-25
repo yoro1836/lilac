@@ -12,6 +12,7 @@
 #include "xdg-shell-client-protocol.h"
 #include <wayland-client.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -59,6 +60,11 @@ struct MemSink : vine::wl::FrameSink {
         last_format = format;
         ++gpu_count;
     }
+    // With acks on, a GPU buffer goes back only after shown passes its frame
+    uint32_t gpu_seq() const override { return gpu_count * 2; }
+    bool gpu_shown_after(uint32_t seq) const override { return !acks.load() || (int32_t)(shown.load() - seq) > 0; }
+    std::atomic<bool> acks{false};
+    std::atomic<uint32_t> shown{0};
     uint32_t last_w = 0, last_h = 0, last_format = 0, count = 0, gpu_resource = 0, gpu_count = 0;
     std::vector<uint8_t> first, last_px;
 };
@@ -421,6 +427,25 @@ void test_wlegl(const std::string& dir) {
     wl_display_roundtrip(c.display);
     CHECK(sink.gpu_count == 2 && sink.gpu_resource == 43, "second GPU frame (resource %u)", sink.gpu_resource);
     CHECK(c.releases == 1, "previous buffer released (%d)", c.releases);
+
+    // A host that shows the buffers: b stays until a later frame is on screen
+    sink.acks = true;
+    wl_surface_attach(surf, a, 0, 0);
+    wl_surface_commit(surf);
+    wl_display_roundtrip(c.display);
+    usleep(30000);
+    wl_display_roundtrip(c.display);
+    CHECK(c.releases == 1, "replaced buffer kept until the host shows a later frame (%d)", c.releases);
+    sink.shown = sink.gpu_seq();
+    pump(c.display, [&] { return c.releases == 2; });
+    CHECK(c.releases == 2, "released once the host shows a later frame (%d)", c.releases);
+    // No word from the host: it still goes back, later
+    wl_surface_attach(surf, b, 0, 0);
+    wl_surface_commit(surf);
+    wl_display_roundtrip(c.display);
+    CHECK(c.releases == 2, "kept while the host is quiet (%d)", c.releases);
+    pump(c.display, [&] { return c.releases == 3; });
+    CHECK(c.releases == 3, "released after the host stayed quiet (%d)", c.releases);
     CHECK(sink.count == 0, "no pixel frames");
     CHECK(wl_display_get_error(c.display) == 0, "no protocol error (%d)", wl_display_get_error(c.display));
 

@@ -18,6 +18,10 @@ public:
     uint32_t height() const override { return writer_.height(); }
     void frame(const uint8_t* pixels, uint32_t w, uint32_t h, uint32_t stride, uint32_t shm_format) override;
     void gpu_frame(uint32_t resource, uint32_t w, uint32_t h, uint32_t format) override;
+    uint32_t gpu_seq() const override { return writer_.is_open() ? writer_.frame_seq() : 0; }
+    bool gpu_shown_after(uint32_t seq) const override {
+        return writer_.is_open() && (int32_t)(writer_.host_shown_seq() - seq) > 0;
+    }
 
 private:
     vinefb::Writer writer_;
