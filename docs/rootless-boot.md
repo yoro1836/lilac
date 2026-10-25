@@ -68,10 +68,14 @@ boot, the dev loop in `boot-init.sh`:
 - Bind host `/dev/ptmx` and `/dev/pts`: init's logwrapper needs a pty
   (linkerconfig, vdc), without which no linker namespaces get generated.
 - lmkd: `/product/etc/init/vine-rootless.rc` replaces it with
-  `vine_lmkd` (`app/src/main/cpp/rootless/lmkd_stub.c`), which answers
-  system_server on the lmkd socket. The real one needs PSI or memcg, both
-  closed to apps (the host's lmkd manages the app as a whole); without
-  any lmkd every oom-adj update stalls system_server for about 3 s.
+  `vine_lmkd` (`app/src/main/cpp/rootless/vine_lmkd.c`). The real one
+  needs PSI or memcg, both closed to apps; without any lmkd every oom-adj
+  update stalls system_server for about 3 s, and without kills a guest
+  (GApps above all) grows until the host's lmkd kills the whole app.
+  vine_lmkd takes system_server's priorities and kills the least
+  important cached app while the apps' private memory is over the
+  instance's RAM (`--budget-mb`), or the host's MemAvailable is under
+  1/8 of RAM (under 1/16, background apps too).
 - Audio HAL: in 64_32 images Waydroid's service is 32-bit only. `vine_hal_service`
   (`rootless/hal_service.cpp`) registers the 64-bit passthrough
   implementations instead (audioserver and AudioService wait for them).
