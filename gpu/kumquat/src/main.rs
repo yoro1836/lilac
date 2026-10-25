@@ -1,7 +1,10 @@
 //! The rootless engine's GPU server: guest gfxstream-vk connects to it
 //! over kumquat's socket, and it renders through the host's Vulkan.
 //!
-//! Usage: vine_kumquat SOCKET
+//! Usage: vine_kumquat GPU_SOCKET GRALLOC_SOCKET
+//!
+//! The guest's gralloc allocates its buffers on GRALLOC_SOCKET (see the
+//! wayondroid patch to the kumquat server).
 
 use std::ffi::CStr;
 use std::os::raw::c_int;
@@ -47,20 +50,20 @@ fn ahb_export(ahb: i64) -> Result<i32, ()> {
 }
 
 fn main() {
-    let socket = match std::env::args().nth(1) {
-        Some(s) => s,
-        None => {
-            eprintln!("usage: vine_kumquat SOCKET");
-            std::process::exit(2);
-        }
-    };
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() != 3 {
+        eprintln!("usage: vine_kumquat GPU_SOCKET GRALLOC_SOCKET");
+        std::process::exit(2);
+    }
+    let socket = args[1].clone();
     let _ = kumquat_virtio::rutabaga_gfx::set_ahb_export_callback(ahb_export);
     let _ = std::fs::remove_file(&socket);
     let mut kumquat = match KumquatBuilder::new()
         .set_capset_names("gfxstream-vulkan".into())
         // Needs /dev/udmabuf, which apps may not open; FATAL when it fails
         .set_renderer_features("VulkanAllocateHostVisibleAsUdmabuf:disabled".into())
-        .set_gpu_socket(Some(socket.clone().into()))
+        .set_gpu_socket(Some(socket.clone()))
+        .set_gralloc_socket(Some(args[2].clone()))
         .build()
     {
         Ok(k) => k,

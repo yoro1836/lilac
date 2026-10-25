@@ -28,6 +28,7 @@ struct PrepOptions {
     std::string lib_dir;    // where libvine_lmkd.so and libvine_hal_service.so are
     int dpi = 320;
     bool host_has_32bit = false;
+    bool gpu = false;       // render through vine_kumquat (gfxstream)
 };
 
 // Extracts system.img (and vendor.img into /vendor) unless the rootfs

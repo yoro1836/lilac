@@ -68,7 +68,7 @@ bool mkdirs_or_fail(const std::string& path, std::string* error) {
 }
 
 // The rc that adapts init's services to an app sandbox
-std::string rootless_rc(bool own_audio_hal) {
+std::string rootless_rc(bool own_audio_hal, bool gpu) {
     std::string rc =
         // lmkd needs PSI or memcg, both closed to apps (the host's lmkd
         // covers us): a stand-in answers system_server on its socket
@@ -102,8 +102,13 @@ std::string rootless_rc(bool own_audio_hal) {
         // code was already released (SEGV_ACCERR in llvmpipe-N), which
         // takes SurfaceFlinger or an app down
         "on early-init\n"
-        "    export LP_NUM_THREADS 0\n"
-        "\n"
+        "    export LP_NUM_THREADS 0\n";
+    if (gpu) {
+        // gfxstream-vk talks to vine_kumquat over kumquat's socket
+        rc += "    export VIRTGPU_KUMQUAT 1\n"
+              "    export VIRTGPU_KUMQUAT_GPU_SOCKET /run/user/1000/kumquat-gpu-0\n";
+    }
+    rc += "\n"
         // The engine's boot signal, in its /run/user/1000
         "on property:sys.boot_completed=1\n"
         "    write /run/user/1000/boot_completed 1\n";
@@ -123,12 +128,13 @@ std::string rootless_rc(bool own_audio_hal) {
     return rc;
 }
 
-// What Waydroid's host writes: no GPU device, so software GLES (ANGLE on
-// lavapipe) over memfd-backed gralloc buffers
-std::string waydroid_prop(int dpi) {
-    return "ro.hardware.gralloc=default\n"
-           "ro.hardware.egl=angle\n"
-           "ro.hardware.vulkan=lvp\n"
+// What Waydroid's host writes with no GPU device: software GLES (ANGLE on
+// lavapipe) over memfd-backed gralloc buffers. With the GPU, ANGLE runs
+// on gfxstream-vk and gralloc hands out host ColorBuffers.
+std::string waydroid_prop(int dpi, bool gpu) {
+    return std::string("ro.hardware.gralloc=default\n") +
+           "ro.hardware.egl=angle\n" +
+           (gpu ? "ro.hardware.vulkan=gfxstream\nro.vendor.vine.gpu=1\n" : "ro.hardware.vulkan=lvp\n") +
            "sys.use_memfd=true\n"
            "ro.opengles.version=196610\n"
            "ro.sf.lcd_density=" + std::to_string(dpi) + "\n"
@@ -432,8 +438,10 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         return false;
     // $R/product is an absolute symlink, its files are in system/product
     const std::string product_init = R + "/system/product/etc/init";
-    if (!mkdirs_or_fail(product_init, error) || !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal), 0644, error)) return false;
-    if (!write_mode(R + "/vendor/waydroid.prop", waydroid_prop(o.dpi), 0644, error)) return false;
+    if (!mkdirs_or_fail(product_init, error) || !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal, o.gpu), 0644, error)) return false;
+    if (!write_mode(R + "/vendor/waydroid.prop", waydroid_prop(o.dpi, o.gpu), 0644, error)) return false;
+    if (o.gpu && !copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error))
+        return false;
 
     // A first boot has no app ops recorded, and LineageOS 20's SystemUI
     // then crashes on getPackagesForOps() returning null. Seed one that

@@ -148,6 +148,7 @@ class VineVMManager @Inject constructor(
             "height=${plan.height}",
             "dpi=${plan.dpi}",
             "network=${if (prefs.guestNetwork.first()) "nat" else "none"}",
+            "graphics=${if (prefs.gpuAcceleration.first()) "gfxstream" else "cpu"}",
             "qemu32=${if (needs32) 1 else 0}",
             timeoutMs = 120_000,
         )

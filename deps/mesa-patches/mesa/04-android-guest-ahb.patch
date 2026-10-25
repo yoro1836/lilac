@@ -1,3 +1,12 @@
+From: wayondroid
+Origin: own
+
+gfxstream-vk as an Android 13 HAL from meson: build the AHB and goldfish
+gralloc sources (minigbm only where its header exists), link stubs for
+the AHardwareBuffer calls they make, and answer the Android loader's
+VkPhysicalDevicePresentationPropertiesANDROID in the guest; the host
+decoder aborts on it.
+
 diff --git a/src/android_stub/nativewindow_stub.cpp b/src/android_stub/nativewindow_stub.cpp
 index 9276a9c..e4c581a 100644
 --- a/src/android_stub/nativewindow_stub.cpp
@@ -22,6 +31,30 @@ index 9276a9c..e4c581a 100644
  void
  ANativeWindow_acquire(ANativeWindow *window)
  {
+diff --git a/src/gfxstream/codegen/scripts/cereal/encoder.py b/src/gfxstream/codegen/scripts/cereal/encoder.py
+index 452ec56..974a82c 100644
+--- a/src/gfxstream/codegen/scripts/cereal/encoder.py
++++ b/src/gfxstream/codegen/scripts/cereal/encoder.py
+@@ -73,7 +73,6 @@ ENCODER_CUSTOM_RESOURCE_POSTPROCESS = [
+     "vkCreateDevice",
+     "vkMapMemoryIntoAddressSpaceGOOGLE",
+     "vkGetPhysicalDeviceFeatures2",
+-    "vkGetPhysicalDeviceProperties2",
+     "vkCreateDescriptorUpdateTemplate",
+     "vkGetPhysicalDeviceExternalSemaphoreProperties",
+ ]
+diff --git a/src/gfxstream/codegen/scripts/cereal/functable.py b/src/gfxstream/codegen/scripts/cereal/functable.py
+index 2979db8..a69eae2 100644
+--- a/src/gfxstream/codegen/scripts/cereal/functable.py
++++ b/src/gfxstream/codegen/scripts/cereal/functable.py
+@@ -44,6 +44,7 @@ RESOURCE_TRACKER_ENTRIES = [
+     "vkCreateSamplerYcbcrConversion",
+     "vkDestroySamplerYcbcrConversion",
+     "vkUpdateDescriptorSetWithTemplate",
++    "vkGetPhysicalDeviceProperties2",
+     "vkGetPhysicalDeviceFormatProperties2",
+     "vkGetPhysicalDeviceImageFormatProperties2",
+     "vkBeginCommandBuffer",
 diff --git a/src/gfxstream/guest/android/GfxStreamGralloc.cpp b/src/gfxstream/guest/android/GfxStreamGralloc.cpp
 index 1a70a9d..515c730 100644
 --- a/src/gfxstream/guest/android/GfxStreamGralloc.cpp
@@ -122,3 +155,31 @@ index b00d5e3..e524f5a 100644
     link_with: [libgfxstream_vk_stubs, libvulkan_wsi, libplatform_virtgpu,
                 libconnection_manager, libaemu],
     link_args: [vulkan_icd_link_args, ld_args_bsymbolic, ld_args_gc_sections],
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+index 4702897..f8cc404 100644
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+@@ -2183,6 +2183,23 @@ void ResourceTracker::on_vkGetPhysicalDeviceProperties2(void* context,
+     if (!pProperties) {
+         return;
+     }
++    // Android's loader asks for VkPhysicalDevicePresentationPropertiesANDROID,
++    // which the host does not decode: answer it here, without the host
++    VkBaseOutStructure* presentation = nullptr;
++    for (VkBaseOutStructure* p = (VkBaseOutStructure*)pProperties; p->pNext; p = p->pNext) {
++        if (p->pNext->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID) {
++            presentation = p->pNext;
++            p->pNext = presentation->pNext;
++            presentation->pNext = (VkBaseOutStructure*)pProperties->pNext;
++            break;
++        }
++    }
++    VkEncoder* enc = (VkEncoder*)context;
++    enc->vkGetPhysicalDeviceProperties2(physicalDevice, pProperties, true /* do lock */);
++    if (presentation) {
++        ((VkPhysicalDevicePresentationPropertiesANDROID*)presentation)->sharedImage = VK_FALSE;
++        pProperties->pNext = presentation;
++    }
+ #ifdef LINUX_GUEST_BUILD
+     if (VK_PHYSICAL_DEVICE_TYPE_CPU == pProperties->properties.deviceType) {
+         /* For Linux guest: Even if host driver reports DEVICE_TYPE_CPU,

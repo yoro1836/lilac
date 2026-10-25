@@ -187,6 +187,7 @@ void RootlessServer::cmd_start(const std::string& id, const std::vector<std::str
         else if (k == "height") cfg.height = to_int(v, cfg.height);
         else if (k == "dpi") cfg.dpi = to_int(v, cfg.dpi);
         else if (k == "boot_timeout") cfg.boot_timeout_s = to_int(v, cfg.boot_timeout_s);
+        else if (k == "graphics") cfg.gpu = v == "gfxstream";
     }
     if (cfg.width < 64 || cfg.height < 64 || cfg.width > 8192 || cfg.height > 8192) {
         return reply(id, false, "unreasonable display size");

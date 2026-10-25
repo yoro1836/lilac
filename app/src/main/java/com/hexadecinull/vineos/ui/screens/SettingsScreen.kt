@@ -36,6 +36,7 @@ data class AppSettings(
     val guestResolution: GuestResolution = GuestResolution.BALANCED,
     val avoidCutout: Boolean = false,
     val guestNetwork: Boolean = true,
+    val gpuAcceleration: Boolean = false,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -176,6 +177,13 @@ fun SettingsScreen(
                     subtitle = "Give instances a private network behind your phone's connection",
                     checked = settings.guestNetwork,
                     onCheckedChange = { onSettingsChange(settings.copy(guestNetwork = it)) }
+                )
+                SwitchSettingsItem(
+                    icon = Icons.Outlined.Memory,
+                    title = "GPU acceleration (experimental)",
+                    subtitle = "Render rootless instances on your phone's GPU through gfxstream. Takes effect on the next start",
+                    checked = settings.gpuAcceleration,
+                    onCheckedChange = { onSettingsChange(settings.copy(gpuAcceleration = it)) }
                 )
                 SwitchSettingsItem(
                     icon = Icons.Outlined.Code,

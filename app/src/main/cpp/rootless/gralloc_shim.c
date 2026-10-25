@@ -8,13 +8,20 @@
  * more rows gives those writes somewhere to go; consumers still use the
  * buffer's own width and height.
  *
+ * With ro.vendor.vine.gpu=1 the guest renders through gfxstream and
+ * buffers are host ColorBuffers instead (gralloc_gpu.c).
+ *
  * Everything else forwards to the original, moved to
  * gralloc.default_real.so, with its own module; this one carries its
  * name and version, which the hwcomposer and Mesa look at. */
 #include <dlfcn.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/system_properties.h>
+
+#include "gralloc_gpu.h"
 
 #define PAD_ROWS 16
 
@@ -70,6 +77,7 @@ typedef struct alloc_device_t {
 #define GRALLOC_HARDWARE_GPU0 "gpu0"
 
 static const gralloc_module_t* real;
+static int gpu;
 static int (*real_alloc)(alloc_device_t*, int, int, int, int, buffer_handle_t*, int*);
 
 static const gralloc_module_t* load(void) {
@@ -85,8 +93,35 @@ static int padded_alloc(alloc_device_t* dev, int w, int h, int format, int usage
     return real_alloc(dev, w, (h + PAD_ROWS - 1) / PAD_ROWS * PAD_ROWS, format, usage, handle, stride);
 }
 
+static int gpu_alloc(alloc_device_t* dev, int w, int h, int format, int usage, buffer_handle_t* handle,
+                     int* stride) {
+    (void)dev;
+    return vine_gpu_alloc(w, h, format, usage, handle, stride);
+}
+
+static int gpu_free(alloc_device_t* dev, buffer_handle_t handle) {
+    (void)dev;
+    return vine_gpu_free(handle);
+}
+
+static int gpu_close(hw_device_t* dev) {
+    free(dev);
+    return 0;
+}
+
 static int shim_open(const hw_module_t* module, const char* id, hw_device_t** device) {
-    (void)module;
+    if (gpu) {
+        if (strcmp(id, GRALLOC_HARDWARE_GPU0)) return -22;
+        alloc_device_t* d = calloc(1, sizeof *d);
+        if (!d) return -12;
+        d->common.tag = 0x48574454; /* HARDWARE_DEVICE_TAG */
+        d->common.module = (hw_module_t*)module;
+        d->common.close = gpu_close;
+        d->alloc = gpu_alloc;
+        d->free = gpu_free;
+        *device = &d->common;
+        return 0;
+    }
     if (!load()) return -19;
     int r = real->common.methods->open(&real->common, id, device);
     if (r == 0 && !strcmp(id, GRALLOC_HARDWARE_GPU0)) {
@@ -101,22 +136,36 @@ static int shim_open(const hw_module_t* module, const char* id, hw_device_t** de
 
 static int shim_register(const gralloc_module_t* m, buffer_handle_t h) {
     (void)m;
+    if (gpu) return vine_gpu_register(h);
     return load() ? real->registerBuffer(real, h) : -19;
 }
 
 static int shim_unregister(const gralloc_module_t* m, buffer_handle_t h) {
     (void)m;
+    if (gpu) return vine_gpu_unregister(h);
     return load() ? real->unregisterBuffer(real, h) : -19;
 }
 
 static int shim_lock(const gralloc_module_t* m, buffer_handle_t h, int usage, int l, int t, int w, int hh,
                      void** vaddr) {
     (void)m;
+    if (gpu) return vine_gpu_lock(h, usage, vaddr);
     return load() ? real->lock(real, h, usage, l, t, w, hh, vaddr) : -19;
+}
+
+static int shim_lock_ycbcr(const gralloc_module_t* m, buffer_handle_t h, int usage, int l, int t, int w,
+                           int hh, void* ycbcr) {
+    (void)m;
+    (void)l;
+    (void)t;
+    (void)w;
+    (void)hh;
+    return vine_gpu_lock_ycbcr(h, usage, ycbcr);
 }
 
 static int shim_unlock(const gralloc_module_t* m, buffer_handle_t h) {
     (void)m;
+    if (gpu) return vine_gpu_unlock(h);
     return load() ? real->unlock(real, h) : -19;
 }
 
@@ -152,6 +201,12 @@ __attribute__((visibility("default"))) gralloc_module_t HMI = {
 /* Offer only what gralloc.default offers: Mesa reads buffer details
  * through perform() when a module has one. */
 __attribute__((constructor)) static void init(void) {
+    char v[PROP_VALUE_MAX] = "";
+    if (__system_property_get("ro.vendor.vine.gpu", v) > 0 && !strcmp(v, "1")) {
+        gpu = 1;
+        HMI.lock_ycbcr = shim_lock_ycbcr;
+        return;
+    }
     if (!load()) return;
     HMI.common.module_api_version = real->common.module_api_version;
     HMI.common.hal_api_version = real->common.hal_api_version;

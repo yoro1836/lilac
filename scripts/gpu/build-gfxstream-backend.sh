@@ -115,6 +115,10 @@ ar = '$NDK_BIN/llvm-ar'
 strip = '$NDK_BIN/llvm-strip'
 pkg-config = 'pkg-config'
 
+[built-in options]
+# libc++_shared.so sits next to it in the APK's library dir
+cpp_link_args = ['-Wl,-rpath,\$ORIGIN']
+
 [host_machine]
 system = 'android'
 cpu_family = '$cpu_family'

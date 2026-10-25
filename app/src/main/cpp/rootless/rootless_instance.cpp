@@ -259,6 +259,12 @@ bool Instance::start(std::string* error) {
             return false;
         }
     }
+    for (const char* tool : {"libvine_kumquat.so", "libgfxstream_backend.so", "libvine_vk_gfxstream.so"}) {
+        if (cfg_.gpu && !is_regular_file(cfg_.lib_dir + "/" + tool)) {
+            if (error) *error = "this build has no GPU acceleration";
+            return false;
+        }
+    }
     if (!mkdirs(layout_.logs)) {
         if (error) *error = "could not create " + layout_.logs;
         return false;
@@ -276,6 +282,7 @@ bool Instance::start(std::string* error) {
         o.lib_dir = cfg_.lib_dir;
         o.dpi = cfg_.dpi;
         o.host_has_32bit = cfg_.host_has_32bit;
+        o.gpu = cfg_.gpu;
         std::string why;
         const bool ok = extract_rootfs(layout_, &why) && prepare_rootfs(layout_, o, &why);
         if (!ok) fprintf(stderr, "%s\n", why.c_str());
@@ -301,7 +308,12 @@ bool Instance::launch_services(std::string* error) {
                      std::to_string(cfg_.width) + "x" + std::to_string(cfg_.height), "--input", "input"},
                     W, layout_.logs + "/vine_wl.log");
     pulse_pid_ = spawn({lib + "libvine_pulse.so", "--socket", "run/pulse/native"}, W, layout_.logs + "/vine_pulse.log");
-    if (binderd_pid_ < 0 || wl_pid_ < 0 || pulse_pid_ < 0) {
+    // The guest's GPU and gralloc service, its sockets in /run/user/1000
+    if (cfg_.gpu) {
+        kumquat_pid_ = spawn({lib + "libvine_kumquat.so", "kumquat-gpu-0", "vine-gralloc"}, layout_.run,
+                             layout_.logs + "/vine_kumquat.log");
+    }
+    if (binderd_pid_ < 0 || wl_pid_ < 0 || pulse_pid_ < 0 || (cfg_.gpu && kumquat_pid_ < 0)) {
         if (error) *error = std::string("fork: ") + strerror(errno);
         return false;
     }
@@ -413,6 +425,10 @@ void Instance::poll() {
         wl_pid_ = -1;
         return fail("The display server exited (" + std::to_string(code) + ")");
     }
+    if (exited(kumquat_pid_, &code)) {
+        kumquat_pid_ = -1;
+        return fail("The GPU server exited (" + std::to_string(code) + ")");
+    }
     if (exited(pulse_pid_, nullptr)) pulse_pid_ = -1; // the guest goes on without sound
     if (phase_ == Phase::Booting) {
         if (path_exists(layout_.run + "/boot_completed")) {
@@ -436,6 +452,7 @@ void Instance::teardown() {
     reap(prep_pid_, SIGKILL, 1000);
     reap(keeper_pid_, SIGTERM, 8000);
     reap(binderd_pid_, SIGTERM, 2000);
+    reap(kumquat_pid_, SIGTERM, 2000);
     reap(wl_pid_, SIGTERM, 2000);
     reap(pulse_pid_, SIGTERM, 2000);
     for (pid_t& p : detached_) reap(p, SIGKILL, 1000);
@@ -590,7 +607,7 @@ std::string Instance::diagnostics() const {
     if (!error_.empty()) out += "Error: " + error_ + "\n";
     out += "Instance: " + layout_.work + "\n";
     const std::pair<const char*, size_t> logs[] = {
-        {"prepare.log", 5}, {"init.log", 30}, {"binderd.log", 10}, {"vine_wl.log", 10}, {"vine_pulse.log", 5}};
+        {"prepare.log", 5}, {"init.log", 30}, {"binderd.log", 10}, {"vine_wl.log", 10}, {"vine_pulse.log", 5}, {"vine_kumquat.log", 10}};
     for (const auto& [name, lines] : logs) {
         const std::string t = tail_file(layout_.logs + "/" + name, lines);
         if (!t.empty()) out += std::string("\n--- ") + name + "\n" + t;
