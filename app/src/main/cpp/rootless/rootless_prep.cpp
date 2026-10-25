@@ -67,6 +67,19 @@ bool mkdirs_or_fail(const std::string& path, std::string* error) {
     return mkdirs(path) || fail(error, "could not create " + path);
 }
 
+// `rc` with `option` added to `service`'s definition (after its
+// backslash-continued first line); unchanged if it has no such service
+std::string with_service_option(const std::string& rc, const std::string& service, const std::string& option) {
+    const std::string head = "service " + service + " ";
+    size_t at = rc.compare(0, head.size(), head) == 0 ? 0 : rc.find("\n" + head);
+    if (at == std::string::npos) return rc;
+    if (at) ++at;
+    size_t end = rc.find('\n', at);
+    while (end != std::string::npos && end > 0 && rc[end - 1] == '\\') end = rc.find('\n', end + 1);
+    if (end == std::string::npos) return rc + "\n    " + option + "\n";
+    return rc.substr(0, end + 1) + "    " + option + "\n" + rc.substr(end + 1);
+}
+
 // The rc that adapts init's services to an app sandbox
 std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
     std::string rc =
@@ -113,6 +126,18 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
               "    export VIRTGPU_KUMQUAT_GPU_SOCKET /run/user/1000/kumquat-gpu-0\n";
     }
     rc += "\n"
+        // Emulated storage without FUSE (libvine_vold_shim fakes vold's
+        // FUSE mount): /data/media where FUSE and its pass-through would
+        // be, before zygote forks apps that bind /mnt/user/0 onto /storage
+        "on post-fs-data\n"
+        "    mkdir /mnt/user/0 0710 shell everybody\n"
+        "    mkdir /mnt/user/0/emulated 0700 root root\n"
+        "    mkdir /mnt/pass_through/0 0710 root media_rw\n"
+        "    mkdir /mnt/pass_through/0/emulated 0710 root media_rw\n"
+        "    mount none /data/media /mnt/user/0/emulated bind rec\n"
+        "    mount none /data/media /mnt/pass_through/0/emulated bind rec\n"
+        "    mount none /mnt/user/0 /storage bind rec\n"
+        "\n"
         // The engine's boot signal, in its /run/user/1000
         "on property:sys.boot_completed=1\n"
         "    write /run/user/1000/boot_completed 1\n";
@@ -453,6 +478,16 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         !drop_vendor_hals(R, {"android.hardware.media.omx"}, error))
         return false;
     if (!copy_mode(o.lib_dir + "/libvine_lmkd.so", R + "/system/bin/vine_lmkd", 0755, error)) return false;
+    // vold mounts emulated storage only through FUSE: the shim fakes that
+    // part over the binds vine-rootless.rc makes
+    const std::string vold_rc = R + "/system/etc/init/vold.rc";
+    if (const auto text = read_file(vold_rc)) {
+        if (!mkdirs_or_fail(R + "/system/lib64", error) ||
+            !copy_mode(o.lib_dir + "/libvine_vold_shim.so", R + "/system/lib64/libvine_vold_shim.so", 0644, error) ||
+            (text->find("libvine_vold_shim") == std::string::npos &&
+             !write_mode(vold_rc, with_service_option(*text, "vold", "setenv LD_PRELOAD /system/lib64/libvine_vold_shim.so"), 0644, error)))
+            return false;
+    }
     // The padded gralloc takes gralloc.default's place (the hwcomposer and
     // Mesa tell gralloc kinds apart by ro.hardware.gralloc) and loads it
     // under another name

@@ -120,6 +120,12 @@ target_compile_options(vine_gralloc PRIVATE -fvisibility=hidden)
 target_link_libraries(vine_gralloc PRIVATE dl)
 target_link_options(vine_gralloc PRIVATE -Wl,-z,max-page-size=16384)
 
+# Preloaded into the guest's vold: emulated storage without FUSE
+add_library(vine_vold_shim SHARED rootless/vold_fuse_shim.c)
+target_compile_options(vine_vold_shim PRIVATE -fvisibility=hidden)
+target_link_libraries(vine_vold_shim PRIVATE dl)
+target_link_options(vine_vold_shim PRIVATE -Wl,-z,max-page-size=16384)
+
 foreach(tool vine_wl vine_lmkd vine_pulse vine_hal_service)
     set_target_properties(${tool} PROPERTIES PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "${tool}")
     if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)

@@ -158,6 +158,8 @@ def build_images(top, inst, audio_hal_class=1):
     with open(os.path.join(sysd, "system/bin/mediaserver"), "wb") as f:
         f.write(elf(1))
     open(os.path.join(sysd, "system/etc/init/mediaserver.rc"), "w").write("service media /system/bin/mediaserver\n    class main\n")
+    open(os.path.join(sysd, "system/etc/init/vold.rc"), "w").write(
+        "service vold /system/bin/vold \\\n        --blkid_context=u:r:blkid:s0\n    class core\n\non post-fs\n    start vold\n")
     open(os.path.join(sysd, "system/etc/init/init64.rc"), "w").write("service ok /system/bin/init\n    class main\n")
     os.makedirs(os.path.join(vend, "etc/init"), exist_ok=True)
     os.makedirs(os.path.join(vend, "etc/vintf/manifest"), exist_ok=True)
@@ -183,6 +185,7 @@ def build_libs(lib):
     write_exec(os.path.join(lib, "libvine_pulse.so"), FAKE_PULSE)
     write_exec(os.path.join(lib, "libvine_wl.so"), FAKE_WL)
     write_exec(os.path.join(lib, "libvine_lmkd.so"), "#!/bin/sh\n# lmkd\n")
+    write_exec(os.path.join(lib, "libvine_vold_shim.so"), "vold shim\n")
     write_exec(os.path.join(lib, "libvine_gralloc.so"), "gralloc\n")
     write_exec(os.path.join(lib, "libvine_hal_service.so"), "#!/bin/sh\n# hal\n")
     write_exec(os.path.join(lib, "fakebin/cmd"), FAKE_CMD)
@@ -322,6 +325,11 @@ def main():
     check(os.path.exists(rc_path) and stat.S_IMODE(os.stat(rc_path).st_mode) == 0o644, "rc mode 644")
     check(os.access(os.path.join(R, "vendor/bin/hw/vine_hal_service"), os.X_OK), "hal service installed")
     check(os.access(os.path.join(R, "system/bin/vine_lmkd"), os.X_OK), "lmkd installed")
+    vold = read(os.path.join(R, "system/etc/init/vold.rc"))
+    check(vold.startswith("service vold /system/bin/vold \\\n        --blkid_context=u:r:blkid:s0\n"
+                          "    setenv LD_PRELOAD /system/lib64/libvine_vold_shim.so\n    class core\n"), "vold preloads the FUSE shim: " + vold)
+    check(os.path.exists(os.path.join(R, "system/lib64/libvine_vold_shim.so")), "vold shim installed")
+    check("mount none /data/media /mnt/user/0/emulated bind rec\n" in rc, "storage binds")
     check(read(os.path.join(R, "vendor/lib64/hw/gralloc.default.so")) == "gralloc\n" and
           read(os.path.join(R, "vendor/lib64/hw/gralloc.default_real.so")) == "default gralloc\n", "gralloc shim installed")
     check("ro.sf.lcd_density=240" in read(os.path.join(R, "vendor/waydroid.prop")), "waydroid.prop density")
@@ -401,6 +409,7 @@ def main():
     ev = h.wait_state(name, "error")
     check(ev is not None and "init exited with 3" in ev[3], "init crash reported: " + str(ev))
     check(os.path.exists(marker), "no second extraction")
+    check(read(os.path.join(R, "system/etc/init/vold.rc")).count("libvine_vold_shim") == 1, "vold.rc patched once")
     os.unlink(os.path.join(W, "init-crash"))
 
     print("[64-bit audio HAL kept]")

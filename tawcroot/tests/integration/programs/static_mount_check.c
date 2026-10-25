@@ -1,4 +1,4 @@
-/* `tawcroot --init` mount emulation: tmpfs, bind, move and umount
+/* `tawcroot --init` mount emulation: tmpfs, bind (recursive too), move and umount
  * through the session's mount table, seen by an older process, an
  * exec'd image and /proc/self/mountinfo; mount namespaces
  * (unshare(CLONE_NEWNS)) keep their changes private; plus the container-style
@@ -107,6 +107,15 @@ int main(int argc, char **argv)
 	if (mount("/mnt/b", "/mnt/c", 0, MS_MOVE, 0) != 0) return 32;
 	if (exists("/mnt/b/x") || !exists("/mnt/c/x")) return 33;
 	if (umount2("/mnt/c", 0) != 0 || exists("/mnt/c/x")) return 34;
+
+	/* MS_REC brings the mounts under the source along (zygote binds
+	 * /mnt/user/<u> with FUSE inside onto /storage); a plain bind not. */
+	if (mkdir("/mnt/t/sub", 0755) != 0 || mount("tmpfs", "/mnt/t/sub", "tmpfs", 0, 0) != 0 ||
+	    touch("/mnt/t/sub/y") != 0) return 35;
+	if (mount("/mnt/t", "/mnt/b", 0, MS_BIND | MS_REC, 0) != 0 || !exists("/mnt/b/sub/y")) return 36;
+	if (mount("/mnt/t", "/mnt/c", 0, MS_BIND, 0) != 0 || !exists("/mnt/c/sub") || exists("/mnt/c/sub/y")) return 37;
+	if (umount2("/mnt/c", 0) != 0 || umount2("/mnt/b/sub", 0) != 0 || umount2("/mnt/b", 0) != 0 ||
+	    umount2("/mnt/t/sub", 0) != 0 || exists("/mnt/b/x")) return 38;
 
 	close(open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC));
 	if (umount2("/mnt/t", 0) != 0) return 40;

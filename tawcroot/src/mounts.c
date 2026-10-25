@@ -420,6 +420,28 @@ static long new_backing(char *out, uint32_t id, const char *data)
     return TAWC_RAW(TAWC_SYS_fchmodat, AT_FDCWD, (long)out, mode & 07777, 0, 0, 0);
 }
 
+/* MS_REC: the mounts under the bind's source show up under its target
+ * too (Android's zygote binds /mnt/user/<u> with its FUSE mount inside
+ * onto /storage). Entries from `first` on are this bind's own. */
+static long bind_submounts(const char *gsource, const char *abs, uint32_t first, char *buf)
+{
+    TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+    char *dst = scratch->buf[2];
+    long e = guest_target(gsource, buf, 1);
+    if (e) return e;
+    const size_t sl = tawc_strlen(buf + 1);
+    for (int i = 0; i < MAX_MOUNTS; ++i) {
+        const struct entry *s = &g_tab->e[i];
+        if (!s->id || s->id >= first || !sl || !tawc_starts_with(s->dst, buf + 1) || s->dst[sl] != '/') continue;
+        size_t n = 0;
+        if (tawc_str_append(dst, TAWCROOT_PATH_SCRATCH_SIZE, &n, abs) ||
+            tawc_str_append(dst, TAWCROOT_PATH_SCRATCH_SIZE, &n, s->dst + sl)) return TAWC_ENAMETOOLONG;
+        e = add_entry(dst, s->src, s->type, s->source, (int)s->ro, 0);
+        if (e) return e;
+    }
+    return 0;
+}
+
 static long do_mount(const char *gsource, const char *gtarget, const char *gtype,
                      unsigned long flags, const char *gdata, char *abs, char *buf)
 {
@@ -451,7 +473,10 @@ static long do_mount(const char *gsource, const char *gtarget, const char *gtype
         long e = host_source(gsource, buf);
         if (!e) e = guest_target(gtarget, abs, 1);
         if (e) return e;
-        return add_entry(abs, buf, "", "none", (int)(flags & MS_RDONLY), 0);
+        const uint32_t first = g_tab->next_id;
+        e = add_entry(abs, buf, "", "none", (int)(flags & MS_RDONLY), 0);
+        if (e || !(flags & MS_REC)) return e;
+        return bind_submounts(gsource, abs, first, buf);
     }
     long e = guest_target(gtarget, abs, 0);
     int missing = e == TAWC_ENOENT;
