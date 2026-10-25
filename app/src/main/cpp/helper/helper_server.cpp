@@ -449,7 +449,10 @@ void HelperServer::cmd_rmtree(const std::string& id, const std::vector<std::stri
 
 int helper_main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
+    // --send SOCKET CMD ARGS...: one request to a running helper's debug socket
+    if (argc >= 4 && !strcmp(argv[1], "--send")) return line_server_send(argv[2], std::vector<std::string>(argv + 3, argv + argc));
     HelperOptions opts;
+    std::string debug_socket;
     bool rootless = false;
     std::string self = argc > 0 ? argv[0] : "";
     const size_t slash = self.rfind('/');
@@ -463,6 +466,7 @@ int helper_main(int argc, char** argv) {
         else if (a == "--gid" && has_value) opts.owner_gid = atoi(argv[++i]);
         else if (a == "--libdir" && has_value) lib_dir = argv[++i];
         else if (a == "--rootless") rootless = true;
+        else if (a == "--debug-socket" && has_value) debug_socket = argv[++i];
     }
     if (opts.owner_gid < 0) opts.owner_gid = opts.owner_uid;
     if (opts.base_dir.empty()) {
@@ -472,6 +476,8 @@ int helper_main(int argc, char** argv) {
     umask(022);
     if (rootless) {
         RootlessServer server(STDIN_FILENO, STDOUT_FILENO, {opts.base_dir, lib_dir});
+        std::string error;
+        if (!debug_socket.empty() && !server.listen_debug(debug_socket, &error)) fprintf(stderr, "%s\n", error.c_str());
         return server.run();
     }
     if (geteuid() != 0) {

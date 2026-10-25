@@ -170,8 +170,9 @@ def build_libs(lib):
 
 
 class Helper:
-    def __init__(self, base, lib):
-        self.p = subprocess.Popen([helper_bin, "--rootless", "--base", base, "--libdir", lib], stdin=subprocess.PIPE,
+    def __init__(self, base, lib, debug_socket):
+        self.p = subprocess.Popen([helper_bin, "--rootless", "--base", base, "--libdir", lib, "--debug-socket", debug_socket],
+                                  stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, text=True, bufsize=1)
         self.replies = {}
         self.events = queue.Queue()
@@ -270,7 +271,8 @@ def main():
     R = os.path.join(W, "rootfs")
     check(len(os.path.join(W, "run/pulse/native")) > 108, "the socket paths are longer than sun_path")
 
-    h = Helper(base, lib)
+    sock = os.path.join(top, "debug.sock")
+    h = Helper(base, lib, sock)
     print("[hello]")
     ok, text = h.call("hello")
     check(ok and "engine=rootless" in text and f"uid={os.getuid()}" in text, "hello: " + text)
@@ -336,6 +338,10 @@ def main():
     check("activity start-activity -n com.example.app/.Main" in read(calls), "launch component: " + read(calls))
     ok, text = h.call("launch", name, "bad;name")
     check(not ok, "bad package refused")
+    r = subprocess.run([helper_bin, "--send", sock, "exec", name, "5000", "echo", "from adb"], capture_output=True, text=True)
+    check(r.returncode == 0 and r.stdout == "exit=0\nfrom adb\n", "debug socket exec: " + repr(r.stdout + r.stderr))
+    r = subprocess.run([helper_bin, "--send", sock, "launch", name, "bad;name"], capture_output=True, text=True)
+    check(r.returncode == 1 and "invalid" in r.stdout, "debug socket error: " + repr(r.stdout))
     ok, text = h.call("diag", name)
     check(ok and "Engine: rootless" in text, "diag")
 

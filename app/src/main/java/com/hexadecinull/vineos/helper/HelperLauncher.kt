@@ -16,6 +16,10 @@ object HelperLauncher {
         return listOf("su", "-c", sb.toString())
     }
 
-    fun rootlessCommand(nativeLibDir: String, baseDir: String): List<String> =
-        listOf("$nativeLibDir/$HELPER_LIB", "--rootless", "--base", baseDir)
+    // debugSocket: debug builds only, lets `adb shell run-as` drive the engine (libvine_helper.so --send SOCKET CMD ARGS...)
+    fun rootlessCommand(nativeLibDir: String, baseDir: String, debugSocket: String? = null): List<String> {
+        val cmd = mutableListOf("$nativeLibDir/$HELPER_LIB", "--rootless", "--base", baseDir)
+        if (debugSocket != null) cmd += listOf("--debug-socket", debugSocket)
+        return cmd
+    }
 }

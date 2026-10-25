@@ -16,6 +16,10 @@ public:
     // Serves requests until stdin closes or "quit" arrives, then calls shutdown()
     int run();
 
+    // Also takes requests on a unix socket (debug builds: adb run-as can
+    // drive the engine as the app). Replies go back on that connection.
+    bool listen_debug(const std::string& path, std::string* error);
+
 protected:
     virtual void dispatch(const std::string& id, const std::string& cmd, const std::vector<std::string>& args) = 0;
     // Called at least every 200 ms
@@ -29,11 +33,17 @@ protected:
 private:
     void handle_line(const std::string& line);
     void write_out(const std::string& line);
+    void serve_debug();
 
     int in_fd_;
     int out_fd_;
     std::string inbox_;
     bool quit_ = false;
+    int debug_fd_ = -1;
+    bool in_debug_ = false;
 };
+
+// Sends one request line to a server's debug socket and prints the reply
+int line_server_send(const std::string& path, const std::vector<std::string>& request);
 
 } // namespace vine

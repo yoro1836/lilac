@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
+import com.hexadecinull.vineos.BuildConfig
 import com.hexadecinull.vineos.data.models.AbiCompat
 import com.hexadecinull.vineos.data.models.ROMImage
 import com.hexadecinull.vineos.data.models.VMInstance
@@ -79,7 +80,9 @@ class VineVMManager @Inject constructor(
 
     // Waydroid images under tawcroot, no root needed (docs/rootless.md)
     private val rootlessHelper = HelperClient(scope, requireRoot = false) {
-        ProcessBuilder(HelperLauncher.rootlessCommand(context.applicationInfo.nativeLibraryDir, provisioner.instancesDir.path)).start()
+        val debugSocket = if (BuildConfig.DEBUG) File(context.filesDir, "rootless.sock").path else null
+        ProcessBuilder(HelperLauncher.rootlessCommand(context.applicationInfo.nativeLibraryDir, provisioner.instancesDir.path, debugSocket))
+            .start()
     }
 
     val helperState: StateFlow<HelperState> = helper.state
