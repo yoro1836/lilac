@@ -33,6 +33,7 @@
 #define FMT_IMPLEMENTATION_DEFINED 0x22
 #define FMT_YCBCR_420_888 0x23
 #define FMT_RGBA_1010102 0x2b
+#define FMT_R_8 0x38
 #define FMT_YV12 0x32315659
 
 /* gralloc usage */
@@ -95,6 +96,7 @@ static int format_info(int format, struct format_info* out) {
     case FMT_RGB_565: *out = (struct format_info){VIRGL_B5G6R5, FOURCC('R', 'G', '1', '6'), 2}; return 0;
     case FMT_RGBA_FP16: *out = (struct format_info){VIRGL_R16G16B16A16_FLOAT, FOURCC('A', 'B', '4', 'H'), 8}; return 0;
     case FMT_RGBA_1010102: *out = (struct format_info){VIRGL_R10G10B10A2, FOURCC('A', 'B', '3', '0'), 4}; return 0;
+    case FMT_R_8: *out = (struct format_info){VIRGL_R8, FOURCC('R', '8', ' ', ' '), 1}; return 0;
     case FMT_YV12: *out = (struct format_info){VIRGL_YV12, FOURCC('Y', 'V', '1', '2'), 0}; return 0;
     case FMT_YCBCR_420_888: *out = (struct format_info){VIRGL_NV12, FOURCC('N', 'V', '1', '2'), 0}; return 0;
     case FMT_BLOB: *out = (struct format_info){VIRGL_R8, 0, 1}; return 0;
@@ -184,7 +186,9 @@ int vine_gpu_alloc(int w, int h, int format, int usage, const void** handle, int
         s = (w + 15) & ~15u;
         size = s * h + 2 * (((s / 2 + 15) & ~15u) * ((h + 1) / 2));
     } else {
-        s = (w + 15) & ~15u;
+        /* gfxstream transfers ColorBuffers tightly packed, whatever
+         * stride the request names */
+        s = w;
         size = s * h * fi.bpp;
     }
     if (usage & (USAGE_HW_COMPOSER | USAGE_HW_FB)) bind |= BIND_SCANOUT;

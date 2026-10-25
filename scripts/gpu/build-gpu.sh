@@ -23,6 +23,9 @@ ANDROID_HOME="$ANDROID_HOME" "$SCRIPT_DIR/build-mesa-gfxstream-android.sh" "$@"
 cp "$REPO_DIR/build/mesa-android-aarch64/vulkan.gfxstream.so" "$JNI/libvine_vk_gfxstream.so"
 
 dep_apply_patches rutabaga_gfx "$REPO_DIR/deps/rutabaga-patches/rutabaga_gfx"
+# GFXSTREAM_PATH skips pkg-config, which is what would turn on
+# gfxstream_unstable; the backend has those symbols (fence export: the
+# guest asks for sync fds), so set the cfg by hand.
 CC="$NDK_BIN/aarch64-linux-android28-clang"
 ( cd "$REPO_DIR/gpu/kumquat" &&
   CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC" \
@@ -31,7 +34,7 @@ CC="$NDK_BIN/aarch64-linux-android28-clang"
   AR_aarch64_linux_android="$NDK_BIN/llvm-ar" \
   GFXSTREAM_PATH="$REPO_DIR/build/gfxstream-android-aarch64" \
   CARGO_TARGET_DIR="$REPO_DIR/build/kumquat" \
-  RUSTFLAGS='-C link-arg=-Wl,-rpath,$ORIGIN -C link-arg=-Wl,-z,max-page-size=16384' \
+  RUSTFLAGS='-C link-arg=-Wl,-rpath,$ORIGIN -C link-arg=-Wl,-z,max-page-size=16384 --cfg gfxstream_unstable' \
   cargo build --release --target aarch64-linux-android )
 cp "$REPO_DIR/build/kumquat/aarch64-linux-android/release/vine_kumquat" "$JNI/libvine_kumquat.so"
 "$NDK_BIN/llvm-strip" "$JNI/libvine_kumquat.so"

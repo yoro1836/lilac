@@ -130,11 +130,13 @@ std::string rootless_rc(bool own_audio_hal, bool gpu) {
 
 // What Waydroid's host writes with no GPU device: software GLES (ANGLE on
 // lavapipe) over memfd-backed gralloc buffers. With the GPU, ANGLE runs
-// on gfxstream-vk and gralloc hands out host ColorBuffers.
+// on gfxstream-vk and gralloc hands out host ColorBuffers; zygote must
+// not preload the driver, or its kumquat socket leaks into every fork
+// and zygote's fd check aborts.
 std::string waydroid_prop(int dpi, bool gpu) {
     return std::string("ro.hardware.gralloc=default\n") +
            "ro.hardware.egl=angle\n" +
-           (gpu ? "ro.hardware.vulkan=gfxstream\nro.vendor.vine.gpu=1\n" : "ro.hardware.vulkan=lvp\n") +
+           (gpu ? "ro.hardware.vulkan=gfxstream\nro.vendor.vine.gpu=1\nro.zygote.disable_gl_preload=true\n" : "ro.hardware.vulkan=lvp\n") +
            "sys.use_memfd=true\n"
            "ro.opengles.version=196610\n"
            "ro.sf.lcd_density=" + std::to_string(dpi) + "\n"

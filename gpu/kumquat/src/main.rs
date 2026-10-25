@@ -49,7 +49,25 @@ fn ahb_export(ahb: i64) -> Result<i32, ()> {
     if dup < 0 { Err(()) } else { Ok(dup) }
 }
 
+/// kumquat and rutabaga log through `log`; send it to our log file
+struct StderrLog;
+
+impl log::Log for StderrLog {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::Level::Warn
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            eprintln!("vine_kumquat: {} {}", r.level(), r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
+static LOGGER: StderrLog = StderrLog;
+
 fn main() {
+    let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Warn));
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 {
         eprintln!("usage: vine_kumquat GPU_SOCKET GRALLOC_SOCKET");
