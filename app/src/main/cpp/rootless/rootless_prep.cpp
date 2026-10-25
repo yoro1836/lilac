@@ -147,6 +147,9 @@ std::string waydroid_prop(int dpi, bool gpu) {
            // Codec2 takes linear buffers from DMA-BUF heaps, which apps
            // can't open: gralloc blobs instead (ION | BUFFERQUEUE | BLOB)
            "debug.stagefright.c2-poolmask=851968\n"
+           // The phone's own volume sets the loudness; a guest volume
+           // below max only attenuates twice
+           "ro.config.media_vol_default=15\n"
            "ro.opengles.version=196610\n"
            "ro.sf.lcd_density=" + std::to_string(dpi) + "\n"
            "waydroid.background_start=false\n"
