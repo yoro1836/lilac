@@ -13,3 +13,5 @@ g++ -std=c++17 -O1 -g -Wall -Wextra -fsanitize=address,undefined -I"$cpp/tests/s
     "$cpp/utils/vine_utils.cpp" "$cpp"/rootless/rootless_*.cpp "$cpp/display/wayland/input_lines.cpp" "$out/ext4_extract.o" \
     -lz -o "$out/vine_helper"
 python3 "$here/test_rootless.py" "$out/vine_helper"
+gcc -std=c11 -O1 -g -Wall -Wextra -fsanitize=address,undefined "$cpp/rootless/vine_lmkd.c" -o "$out/vine_lmkd"
+python3 "$here/test_lmkd.py" "$out/vine_lmkd"

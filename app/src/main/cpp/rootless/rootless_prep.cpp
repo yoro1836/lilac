@@ -68,11 +68,11 @@ bool mkdirs_or_fail(const std::string& path, std::string* error) {
 }
 
 // The rc that adapts init's services to an app sandbox
-std::string rootless_rc(bool own_audio_hal, bool gpu) {
+std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
     std::string rc =
-        // lmkd needs PSI or memcg, both closed to apps (the host's lmkd
-        // covers us): a stand-in answers system_server on its socket
-        "service lmkd /system/bin/vine_lmkd\n"
+        // lmkd needs PSI or memcg, both closed to apps: vine_lmkd kills
+        // by system_server's priorities, within the instance's RAM
+        "service lmkd /system/bin/vine_lmkd" + (ram_mb > 0 ? " --budget-mb " + std::to_string(ram_mb) : std::string()) + "\n"
         "    class core\n"
         "    user lmkd\n"
         "    group lmkd system readproc\n"
@@ -465,7 +465,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         return false;
     // $R/product is an absolute symlink, its files are in system/product
     const std::string product_init = R + "/system/product/etc/init";
-    if (!mkdirs_or_fail(product_init, error) || !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal, o.gpu), 0644, error)) return false;
+    if (!mkdirs_or_fail(product_init, error) || !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal, o.gpu, o.ram_mb), 0644, error)) return false;
     if (!write_mode(R + "/vendor/waydroid.prop", waydroid_prop(o.dpi, o.gpu), 0644, error)) return false;
     if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error) ||
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.vine.so", 0644, error)))

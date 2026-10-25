@@ -187,6 +187,7 @@ void RootlessServer::cmd_start(const std::string& id, const std::vector<std::str
         else if (k == "height") cfg.height = to_int(v, cfg.height);
         else if (k == "dpi") cfg.dpi = to_int(v, cfg.dpi);
         else if (k == "refresh") cfg.refresh_hz = to_int(v, cfg.refresh_hz);
+        else if (k == "ram_mb") cfg.ram_mb = to_int(v, cfg.ram_mb);
         else if (k == "boot_timeout") cfg.boot_timeout_s = to_int(v, cfg.boot_timeout_s);
         else if (k == "graphics") cfg.gpu = v == "gfxstream";
     }

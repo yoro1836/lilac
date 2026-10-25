@@ -95,8 +95,8 @@ add_executable(vine_wl
 target_include_directories(vine_wl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../rom/hwc)
 target_link_options(vine_wl PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-size=16384)
 
-# Copied into the guest as its lmkd: answers system_server on the lmkd socket
-add_executable(vine_lmkd rootless/lmkd_stub.c)
+# Copied into the guest as its lmkd: keeps the guest's cached apps in check
+add_executable(vine_lmkd rootless/vine_lmkd.c)
 target_link_options(vine_lmkd PRIVATE -static -Wl,-z,max-page-size=16384)
 
 # Rootless guest audio: Waydroid's audio HAL connects to it, AAudio plays and records

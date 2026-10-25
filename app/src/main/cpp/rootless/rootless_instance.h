@@ -17,6 +17,7 @@ struct InstanceConfig {
     int height = 1440;
     int dpi = 320;
     int refresh_hz = 60;         // the guest display's frame rate
+    int ram_mb = 0;              // vine_lmkd's budget for the guest's apps, 0: none
     int boot_timeout_s = 900;    // first boots compile every app
     bool host_has_32bit = false;
     bool gpu = false;            // graphics=gfxstream: vine_kumquat on the host GPU

@@ -300,7 +300,7 @@ def main():
     check(not ok and "outside" in text, "start outside base refused: " + text)
 
     print("[boot]")
-    ok, text = h.call("start", name, inst, "width=640", "height=480", "dpi=240", "refresh=90")
+    ok, text = h.call("start", name, inst, "width=640", "height=480", "dpi=240", "refresh=90", "ram_mb=1536")
     check(ok, "start: " + text)
     check(h.wait_state(name, "running") is not None, "reaches running")
     ok, text = h.call("status", name)
@@ -317,7 +317,7 @@ def main():
     check("service zygote " in z and "zygote_secondary" not in z, "zygote64 rc: " + z)
     rc_path = os.path.join(R, "system/product/etc/init/vine-rootless.rc")
     rc = read(rc_path)
-    check("service lmkd /system/bin/vine_lmkd" in rc and "vine_hal_service" in rc and
+    check("service lmkd /system/bin/vine_lmkd --budget-mb 1536\n" in rc and "vine_hal_service" in rc and
           "write /run/user/1000/boot_completed 1" in rc, "vine-rootless.rc")
     check(os.path.exists(rc_path) and stat.S_IMODE(os.stat(rc_path).st_mode) == 0o644, "rc mode 644")
     check(os.access(os.path.join(R, "vendor/bin/hw/vine_hal_service"), os.X_OK), "hal service installed")

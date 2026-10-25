@@ -29,6 +29,7 @@ struct PrepOptions {
     int dpi = 320;
     bool host_has_32bit = false;
     bool gpu = false;       // render through vine_kumquat (gfxstream)
+    int ram_mb = 0;         // vine_lmkd's budget for the guest's apps, 0: none
 };
 
 // Extracts system.img (and vendor.img into /vendor) unless the rootfs
