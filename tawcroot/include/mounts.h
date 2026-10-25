@@ -31,5 +31,9 @@ long tawcroot_mounts_magic(int fd);
  * session's mount-change events instead (lazy; fds >= the floor). */
 long tawcroot_mounts_epoll_ctl(const tawcroot_syscall_args *a, ucontext_t *uc);
 
+/* lseek on a synthesized mountinfo fd: a rewind renders it afresh and
+ * acknowledges pending change events (lazy; fds >= the floor). */
+long tawcroot_mounts_lseek(const tawcroot_syscall_args *a, ucontext_t *uc);
+
 /* fstatfs in init sessions (lazy). */
 long tawcroot_mounts_fstatfs(const tawcroot_syscall_args *a, ucontext_t *uc);

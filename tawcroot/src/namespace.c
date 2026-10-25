@@ -942,6 +942,7 @@ void tawcroot_namespace_register(void)
     tawcroot_dispatch_install_lazy(__NR_tkill, namespace_signal);
     tawcroot_dispatch_install_lazy(__NR_rt_sigqueueinfo, namespace_signal);
     tawcroot_dispatch_install_lazy(__NR_epoll_ctl, tawcroot_mounts_epoll_ctl);
+    tawcroot_dispatch_install_lazy(TAWC_SYS_lseek, tawcroot_mounts_lseek);
     tawcroot_dispatch_install_lazy(TAWC_SYS_fstatfs, tawcroot_mounts_fstatfs);
     tawcroot_dispatch_install_lazy(__NR_rt_tgsigqueueinfo, namespace_signal);
     tawcroot_dispatch_install_lazy(TAWC_SYS_uname, tawcroot_uts_syscall);

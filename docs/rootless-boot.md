@@ -142,6 +142,12 @@ boot, the dev loop in `boot-init.sh`:
   refused and reconnected at once, burning the phone's CPU (adbd plus
   every guest app). An init session now prefixes its abstract names with
   `tawc<init pid>.`, invisibly to the guest.
+- init spun a whole core: its MountHandler rewinds its /proc/mounts fd
+  instead of reopening it, so the mount-change wake tawcroot emulates
+  (an inotify watch, drained only on reopen) never cleared after the
+  first change. A rewind (lseek, trapped on synthesized mount fds)
+  now renders the table afresh and acknowledges the change, as the
+  kernel does.
 - binderd freed a transaction's target node while the buffer still
   pointed at it (`free_buffer` then touched freed memory); a buffer now
   pins its target node.

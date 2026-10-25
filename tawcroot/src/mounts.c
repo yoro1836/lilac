@@ -538,8 +538,12 @@ long tawcroot_mounts_umount(const char *gtarget, int flags)
  * filter traps epoll_ctl: registering one registers instead an inotify
  * fd watching mounts.event, so libmount's monitor wakes like on a real
  * mount table change. Rendering drains those inotify fds first, so a
- * change after a render always wakes again. */
-static struct { int fd, sub; unsigned long ino; } g_watch[16];
+ * change after a render always wakes again. Rewinding a watched fd
+ * (lseek, trapped above the floor) renders it afresh and drains too,
+ * as reading the kernel's file again acknowledges a change: init's
+ * MountHandler rewinds its fd instead of reopening it, and would
+ * otherwise spin on a wake nothing drains. */
+static struct { int fd, sub, info; unsigned long ino; } g_watch[16];
 
 static void notify(void)
 {
@@ -559,11 +563,15 @@ static unsigned long ino_of(int fd)
 }
 
 /* Move a fresh mountinfo memfd above the floor and remember it. */
-static long watchable(long fd, int cloexec)
+static long watchable(long fd, int cloexec, int info)
 {
     if (!(tawcroot_namespace.session & TAWC_NS_EPOLL_TRAP)) {
         if (tawcroot_install_fd_floor_filter(__NR_epoll_ctl, 2)) return fd;
         tawcroot_namespace.session |= TAWC_NS_EPOLL_TRAP;
+    }
+    if (!(tawcroot_namespace.session & TAWC_NS_LSEEK_TRAP)) {
+        if (tawcroot_install_fd_floor_filter(TAWC_SYS_lseek, 0)) return fd;
+        tawcroot_namespace.session |= TAWC_NS_LSEEK_TRAP;
     }
     long hi = tawc_fcntl((int)fd, cloexec ? F_DUPFD_CLOEXEC : F_DUPFD, TAWCROOT_RESERVED_FD_BASE);
     if (hi < 0) return fd;
@@ -584,6 +592,7 @@ static long watchable(long fd, int cloexec)
         g_watch[slot].fd = (int)hi;
         g_watch[slot].ino = ino;
         g_watch[slot].sub = 0;
+        g_watch[slot].info = info;
     }
     return hi;
 }
@@ -633,6 +642,24 @@ long tawcroot_mounts_epoll_ctl(const tawcroot_syscall_args *a, ucontext_t *uc)
         evp = (long)&ev;
     }
     return TAWC_RAW(__NR_epoll_ctl, a->a, a->b, g_watch[i].sub, evp, 0, 0);
+}
+
+static long render(int out, int info);
+
+long tawcroot_mounts_lseek(const tawcroot_syscall_args *a, ucontext_t *uc)
+{
+    (void)uc;
+    int fd = (int)a->a, i = 0;
+    for (; i < 16; ++i)
+        if (g_watch[i].ino && g_watch[i].fd == fd) break;
+    if (i < 16 && a->b == 0 && a->c == SEEK_SET && ino_of(fd) == g_watch[i].ino) {
+        tawcroot_mounts_sync();
+        drain();
+        if (TAWC_RAW(TAWC_SYS_ftruncate, fd, 0, 0, 0, 0, 0) == 0 &&
+            tawc_lseek(fd, 0, SEEK_SET) == 0)
+            (void)render(fd, g_watch[i].info);
+    }
+    return TAWC_RAW(TAWC_SYS_lseek, a->a, a->b, a->c, 0, 0, 0);
 }
 
 /* --- views -------------------------------------------------------------- */
@@ -788,7 +815,7 @@ long tawcroot_mounts_proc_open(const char *path, int flags)
     long e = render((int)fd, tawc_streq(p, "mountinfo"));
     if (e) { tawc_close((int)fd); return e; }
     (void)tawc_lseek((int)fd, 0, SEEK_SET);
-    return g_tab ? watchable(fd, (flags & O_CLOEXEC) != 0) : fd;
+    return g_tab ? watchable(fd, (flags & O_CLOEXEC) != 0, tawc_streq(p, "mountinfo")) : fd;
 }
 
 /* fstatfs, trapped in init sessions: the same container-facing fixups

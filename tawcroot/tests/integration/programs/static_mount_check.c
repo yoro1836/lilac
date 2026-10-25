@@ -116,6 +116,29 @@ int main(int argc, char **argv)
 	if (mount("none", "/mnt/t", "debugfs", 0, 0) == 0 || errno != EPERM) return 43;
 	if (mount("tmpfs", "/run", "tmpfs", 0, 0) != 0) return 44;
 
+	/* A level-triggered watcher that re-reads its own fd instead of
+	 * reopening it (init's MountHandler) wakes once per change, not
+	 * forever. */
+	int ep2 = epoll_create1(EPOLL_CLOEXEC);
+	int mi2 = open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC);
+	struct epoll_event lt = { .events = EPOLLPRI | EPOLLERR }, got2;
+	if (ep2 < 0 || mi2 < 0 || epoll_ctl(ep2, EPOLL_CTL_ADD, mi2, &lt) != 0) return 46;
+	if (mount("tmpfs", "/mnt/b", "tmpfs", 0, 0) != 0) return 47;
+	if (epoll_wait(ep2, &got2, 1, 2000) != 1) return 48;
+	ssize_t got_n = (lseek(mi2, 0, SEEK_SET) == 0) ? read(mi2, buf, sizeof buf - 1) : -1;
+	if (got_n <= 0) return 49;
+	buf[got_n] = 0;
+	if (!strstr(buf, " /mnt/b ")) return 55;
+	if (epoll_wait(ep2, &got2, 1, 0) != 0) return 50;
+	if (umount2("/mnt/b", 0) != 0 || epoll_wait(ep2, &got2, 1, 2000) != 1) return 51;
+	/* the rewound fd reads the table as it is now */
+	got_n = (lseek(mi2, 0, SEEK_SET) == 0) ? read(mi2, buf, sizeof buf - 1) : -1;
+	if (got_n <= 0) return 52;
+	buf[got_n] = 0;
+	if (strstr(buf, " /mnt/b ")) return 53;
+	close(mi2);
+	close(ep2);
+
 	/* Another process mounts; a vfork child (posix_spawn) is the first
 	 * to see it, in memory it shares with us but with its own fds. */
 	if (mkdir("/mnt/v", 0755) != 0) return 60;
