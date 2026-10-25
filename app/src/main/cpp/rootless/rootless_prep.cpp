@@ -224,6 +224,8 @@ std::string drop_manifest_hal(const std::string& xml, const std::string& hal) {
     return out + xml.substr(pos);
 }
 
+bool drop_vendor_hals(const std::string& R, const std::vector<std::string>& hals, std::string* error);
+
 // Services the host can't run (32-bit only binaries, e.g. mediaserver and
 // the omx HAL): their rc files go, and for vendor HALs their VINTF entries
 // too, so nothing waits for them (system_server waits forever for a
@@ -263,6 +265,11 @@ bool drop_32bit_services(const std::string& R, const std::string& keep, std::str
         }
     }
     }
+    return drop_vendor_hals(R, hals, error);
+}
+
+// Removes HALs from the vendor VINTF manifests
+bool drop_vendor_hals(const std::string& R, const std::vector<std::string>& hals, std::string* error) {
     if (hals.empty()) return true;
     const std::string vintf = R + "/vendor/etc/vintf";
     std::vector<std::string> manifests = {vintf + "/manifest.xml"};
@@ -429,6 +436,12 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         if (own_audio_hal && !copy_mode(hal_service, R + "/vendor/bin/hw/vine_hal_service", 0755, error)) return false;
         if (!drop_32bit_services(R, own_audio_hal ? "android.hardware.audio.service" : "", error)) return false;
     }
+    // waydroid_arm64_only declares the omx HAL but has no service for it:
+    // mediaserver then waits for IOmx forever, and with it everything that
+    // lists codecs (MediaProvider never comes up, ringtones hang Settings)
+    if (!is_regular_file(R + "/vendor/bin/hw/android.hardware.media.omx@1.0-service") &&
+        !drop_vendor_hals(R, {"android.hardware.media.omx"}, error))
+        return false;
     if (!copy_mode(o.lib_dir + "/libvine_lmkd.so", R + "/system/bin/vine_lmkd", 0755, error)) return false;
     // The padded gralloc takes gralloc.default's place (the hwcomposer and
     // Mesa tell gralloc kinds apart by ro.hardware.gralloc) and loads it

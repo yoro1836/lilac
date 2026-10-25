@@ -43,10 +43,13 @@
 
 #define TAWCROOT_RESERVED_FD_BASE 1000
 
-/* Cap on simultaneously reserved fds: rootfs (1) + binds (TAWCROOT_MAX_BINDS).
- * Sized generously above the 8 we ship today. Only matters as the BPF
- * filter generator's array bound; runtime growth is the bind table's. */
-#define TAWCROOT_MAX_RESERVED_FDS 256
+/* Cap on simultaneously reserved fds: rootfs, binds, linkstore, socket
+ * parents, shm, and one socket per binder-using thread (binder.c). A
+ * busy system_server has 160+ such threads and 245 reserved fds; at
+ * the cap a new binder thread fails with ENOMEM and the process
+ * aborts. Unused slots cost only zero BSS pages; lookups scan up to the
+ * high-water mark, not the cap. */
+#define TAWCROOT_MAX_RESERVED_FDS 4096
 
 /* Tombstone: a slot whose fd has been given up (tawcroot_fd_forget_
  * reserved). Any value below TAWCROOT_RESERVED_FD_BASE means "not a
