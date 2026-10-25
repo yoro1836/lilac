@@ -1,10 +1,10 @@
 <div align="center">
 
-# 🌿 VineOS
+# 🌿 Wayondroid
 
-**A free, open-source, ad-free Android-on-Android virtual machine.**
-Run a full isolated Android guest inside your existing device, with
-**32-bit app support on arm64-only hardware** via QEMU user-mode emulation.
+**Waydroid on Android: a free, open-source Android-in-Android app.**
+Runs Waydroid's LineageOS images inside an ordinary app, **without root**,
+on its own userspace container runtime (tawcroot) and binder.
 
 [![Pipeline status](https://gitlab.com/Hexadecinull/VineOS/VineOS/badges/main/pipeline.svg)](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/pipelines)
 [![Latest release](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/badges/release.svg)](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/releases)
@@ -23,7 +23,7 @@ Run a full isolated Android guest inside your existing device, with
 
 ## Table of Contents
 
-- [What is VineOS?](#what-is-vineos)
+- [What is Wayondroid?](#what-is-wayondroid)
 - [Features](#features)
 - [Supported devices](#supported-devices)
 - [ROM support](#rom-support)
@@ -39,26 +39,29 @@ Run a full isolated Android guest inside your existing device, with
 
 ---
 
-## What is VineOS?
+## What is Wayondroid?
 
-VineOS runs a complete, isolated Android operating system inside your
+Wayondroid runs a complete, isolated Android operating system inside your
 existing Android device, without modifying the host OS or requiring root
 on most paths.
 
 Unlike simple "app cloners" (Parallel Space, Dual Space) that sandbox
-individual apps, VineOS virtualizes the full Android stack: its own
+individual apps, Wayondroid virtualizes the full Android stack: its own
 `init`, `Zygote`, `SurfaceFlinger`, `ServiceManager`, and everything else.
 You get a real second phone inside your phone.
 
-> **Status.** The container engine boots a test ROM through real Linux
-> namespaces and mounts, and the app, helper and guest protocols are unit
-> tested. No real Android system image has booted inside VineOS yet, so the
-> first bootable ROM is the open milestone. The
-> [`rom/`](rom/README.md) folder holds the guest side kit a ROM needs.
+> **Status.** The rootless engine boots Waydroid's LineageOS 20 images
+> (`waydroid_arm64_only` recommended) to a usable home screen inside the
+> app on a stock, unrooted phone: touch, keys, text, app launching and
+> WebView work. Networking and GPU acceleration are in progress; see
+> [docs/rootless.md](docs/rootless.md) and
+> [docs/rootless-boot.md](docs/rootless-boot.md). The root engine (real
+> namespaces and mounts) is still there for rooted phones, and the
+> [`rom/`](rom/README.md) folder holds its guest side kit.
 
-**Why VineOS over alternatives like VPhoneOS or VMOS?**
+**Why Wayondroid over alternatives like VPhoneOS or VMOS?**
 
-| Feature | VineOS | VPhoneOS | VMOS | Virtual Master |
+| Feature | Wayondroid | VPhoneOS | VMOS | Virtual Master |
 |---|:---:|:---:|:---:|:---:|
 | Open source | ✅ | ❌ | ❌ | ❌ |
 | Ad-free | ✅ | ❌ | ❌ | ❌ |
@@ -128,7 +131,7 @@ build guide.
 Download the latest release APK from the
 [Releases page](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/releases).
 
-VineOS is not yet on the Play Store. First release planned at Beta
+Wayondroid is not yet on the Play Store. First release planned at Beta
 stability.
 
 ---
@@ -143,7 +146,7 @@ repository, [VineOS-Documentation](https://gitlab.com/Hexadecinull/VineOS/VineOS
 
 ## Repositories
 
-VineOS is split across three GitLab repositories:
+Wayondroid is split across three GitLab repositories:
 
 | Repository | What it contains |
 |---|---|
@@ -199,24 +202,24 @@ VineOS is split across three GitLab repositories:
 
 ## FAQ
 
-**Does VineOS require root?**
+**Does Wayondroid require root?**
 Today yes. The engine runs in a small helper started with `su`, because
 `unshare()` and `mount()` need `CAP_SYS_ADMIN`. The no-root path is Phase 4
 and is not built yet. Root inside an instance (Magisk) is a separate, optional thing.
 
-**Does VineOS work on arm64-only phones without 32-bit support?**
-Yes, this is one of the core things VineOS is built for. We're aiming to
+**Does Wayondroid work on arm64-only phones without 32-bit support?**
+Yes, this is one of the core things Wayondroid is built for. We're aiming to
 support a wide range of SoCs across vendors, not just a specific model or
-two, and VineOS auto-detects arm64-only chips and switches to QEMU mode
+two, and Wayondroid auto-detects arm64-only chips and switches to QEMU mode
 automatically.
 
 **Why GPL-3.0 and not MIT/Apache?**
-VineOS uses QEMU (GPL-2.0-or-later) and is architecturally inspired by
+Wayondroid uses QEMU (GPL-2.0-or-later) and is architecturally inspired by
 Anbox/Waydroid (GPL-3.0). GPL-3.0 ensures commercial forks must also open
 their changes.
 
-**Can I use VineOS on x86_64 Android devices or emulators?**
-Yes. VineOS builds and runs on `arm64-v8a`, `armeabi-v7a`, `x86_64`, and
+**Can I use Wayondroid on x86_64 Android devices or emulators?**
+Yes. Wayondroid builds and runs on `arm64-v8a`, `armeabi-v7a`, `x86_64`, and
 `x86` hosts; ARM guest ROMs run through QEMU on non-ARM hosts. See
 [ARCHITECTURE.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/reference/ARCHITECTURE.md#abi-compatibility) for exactly
 what runs natively versus emulated on each host.
@@ -226,7 +229,7 @@ what runs natively versus emulated on each host.
 ## Community
 
 Questions, bug reports, or just curious how it works? Join the official
-[VineOS Discord](https://discord.gg/sVgCAdgGgR). It's the quickest way to
+[Discord](https://discord.gg/sVgCAdgGgR). It's the quickest way to
 reach the developers and other users.
 
 ---
@@ -243,7 +246,7 @@ report a security vulnerability, follow the
 
 ## License
 
-VineOS is licensed under the GNU General Public License v3.0. See
+Wayondroid is licensed under the GNU General Public License v3.0. See
 [LICENSE](LICENSE) for the full text, and
 [TERMS.md](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/project/TERMS.md) for the project's terms of use.
 
@@ -261,11 +264,11 @@ VineOS is licensed under the GNU General Public License v3.0. See
 
 ## Credits & acknowledgements
 
-- **[Anbox](https://github.com/anbox/anbox)**: the original Android-in-a-Linux-container project; VineOS's container architecture is directly inspired by its design
+- **[Anbox](https://github.com/anbox/anbox)**: the original Android-in-a-Linux-container project; Wayondroid's container architecture is directly inspired by its design
 - **[Waydroid](https://github.com/waydroid/waydroid)**: maintained successor, reference for namespace setup and binfmt_misc integration
 - **[redroid](https://github.com/remote-android/redroid-doc)**: Android in Docker, reference for mount table and device node setup
-- **[QEMU](https://www.qemu.org/)**: the backbone of VineOS's 32-bit emulation
-- **[VPhoneOS / VPhoneGaGa](https://vphoneos.com/)**: the closed-source inspiration that VineOS aims to replace with an open alternative
+- **[QEMU](https://www.qemu.org/)**: the backbone of Wayondroid's 32-bit emulation
+- **[VPhoneOS / VPhoneGaGa](https://vphoneos.com/)**: the closed-source inspiration that Wayondroid aims to replace with an open alternative
 - The entire Android homebrew and modding community
 
 ---

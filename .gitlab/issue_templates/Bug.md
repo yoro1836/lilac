@@ -7,7 +7,7 @@ https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation/-/blob/main/project/
 Questions or ideas? Ask in the Discord: https://discord.gg/sVgCAdgGgR
 -->
 
-## VineOS version
+## Wayondroid version
 
 <!-- Found in Settings → About → Version, e.g. 0.1.0-alpha -->
 
@@ -34,7 +34,7 @@ Questions or ideas? Ask in the Discord: https://discord.gg/sVgCAdgGgR
 
 ## Steps to reproduce
 
-1. Open VineOS
+1. Open Wayondroid
 2. Tap 'New Instance'
 3. Select ROM
 4. See error

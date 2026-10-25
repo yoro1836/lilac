@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the VineOS ROM store manifest.json from a directory of .vrom files.
+"""Generate the Wayondroid ROM store manifest.json from a directory of .vrom files.
 
 Reads each .vrom's own embedded manifest.json for the descriptive fields,
 computes the whole-file sha256 the app actually verifies after download

@@ -1,6 +1,6 @@
-# VineOS ROM kit
+# Wayondroid ROM kit
 
-Everything a ROM needs to run inside a VineOS instance, kept next to the engine that expects it.
+Everything a ROM needs to run inside a Wayondroid instance, kept next to the engine that expects it.
 
 **Status: written against the engine contract and unit tested on a host, never run inside a booted Android ROM.** The engine runs a fake init on a real kernel in the host tests. Nothing here has booted a real Android system image yet, so treat the first boot as the open milestone, not a given.
 

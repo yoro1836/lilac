@@ -95,7 +95,7 @@ class HelperClient(private val scope: CoroutineScope, private val requireRoot: B
             val reason = if (!proc.isAlive) {
                 helperFailureText(proc)
             } else if (requireRoot) {
-                "Timed out waiting for root access. Grant VineOS superuser permission and try again."
+                "Timed out waiting for root access. Grant Wayondroid superuser permission and try again."
             } else {
                 "The rootless engine did not start in time"
             }
@@ -108,7 +108,7 @@ class HelperClient(private val scope: CoroutineScope, private val requireRoot: B
         if (!hello.ok || uid == null || (requireRoot && uid != 0)) {
             proc.destroy()
             if (!requireRoot) return@withLock fail("The rootless engine did not answer")
-            return@withLock fail("The helper did not get root (uid=${uid ?: "unknown"}). Check that su grants root to VineOS.")
+            return@withLock fail("The helper did not get root (uid=${uid ?: "unknown"}). Check that su grants root to Wayondroid.")
         }
         stateFlow.value = HelperState.Ready(uid)
         stateFlow.value
@@ -212,7 +212,7 @@ class HelperClient(private val scope: CoroutineScope, private val requireRoot: B
         }.getOrNull()
         val tail = synchronized(stderrTail) { stderrTail.takeLast(3).joinToString(" ").trim() }
         return when {
-            code == 3 -> "The helper started without root. Check that su grants root to VineOS."
+            code == 3 -> "The helper started without root. Check that su grants root to Wayondroid."
             code == 2 -> "The helper was started with wrong arguments"
             tail.isNotEmpty() -> "The $name stopped: $tail"
             code != null && requireRoot -> "The root helper stopped (exit code $code). Root permission may have been denied."

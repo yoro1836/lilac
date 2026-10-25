@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Packs ramdisk.img, vendor.img (optional) and system.img into a .vrom for VineOS.
+"""Packs ramdisk.img, vendor.img (optional) and system.img into a .vrom for Wayondroid.
 
 --kind waydroid packs a system-as-root image (no ramdisk, e.g. Waydroid's
 system.img and vendor.img), which the app boots on the rootless engine."""

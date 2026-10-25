@@ -19,7 +19,7 @@ struct HelperOptions {
     int owner_gid = -1;
 };
 
-// Root side of VineOS, spoken over stdin and stdout as tab separated lines (see HelperProtocol.kt)
+// Root side of Wayondroid, spoken over stdin and stdout as tab separated lines (see HelperProtocol.kt)
 class HelperServer : public LineServer {
 public:
     HelperServer(int in_fd, int out_fd, HelperOptions options);

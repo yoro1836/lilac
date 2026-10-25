@@ -1,6 +1,6 @@
 # Rootless engine: Waydroid images on tawcroot
 
-VineOS today needs root: `libvine_helper.so` runs under `su` because
+Wayondroid today needs root: `libvine_helper.so` runs under `su` because
 `unshare`, `mount` and loop devices need `CAP_SYS_ADMIN`. This document is
 the structure for the no-root path (roadmap Phase 4), which replaces the
 planned `proot` fallback.
@@ -8,7 +8,7 @@ planned `proot` fallback.
 The idea: boot an Android image with **tawcroot** (`tawcroot/`, the
 seccomp/SIGSYS rootless runtime imported from TAWC and developed here), emulate
 binder in userspace, and draw the guest through a small Wayland compositor
-inside the VineOS app. The guest ROM is a **Waydroid** LineageOS image, which
+inside the Wayondroid app. The guest ROM is a **Waydroid** LineageOS image, which
 is already built for containers.
 
 Rule of thumb: kernel interfaces are emulated in tawcroot (works for any
@@ -39,7 +39,7 @@ Checked against `lineage-20.0-20260927-VANILLA-waydroid_arm64-system.zip` and
 ## Process layout (rootless)
 
 ```
-VineOS app process (app uid)
+Wayondroid app process (app uid)
 ├─ Kotlin UI, VineVMManager, HelperClient
 ├─ libvine_runtime.so: DisplayBridge draws <instance>/shared/vinefb
 └─ libvine_helper.so --rootless                      (same line protocol, no su)

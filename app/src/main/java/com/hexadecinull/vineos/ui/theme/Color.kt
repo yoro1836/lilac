@@ -2,7 +2,7 @@ package com.hexadecinull.vineos.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// VineOS brand palette: seed for Material You, and static fallback pre-Android 12
+// Wayondroid brand palette: seed for Material You, and static fallback pre-Android 12
 
 // Primary: Vine green
 val VineGreen10 = Color(0xFF002204)

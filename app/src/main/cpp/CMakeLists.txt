@@ -30,7 +30,7 @@ endif()
 
 if(ANDROID_PLATFORM_LEVEL LESS 26)
     message(FATAL_ERROR
-        "VineOS requires Android API 26+ (minSdk=26). "
+        "Wayondroid requires Android API 26+ (minSdk=26). "
         "Current ANDROID_PLATFORM_LEVEL=${ANDROID_PLATFORM_LEVEL}")
 endif()
 
@@ -130,4 +130,4 @@ elseif(CMAKE_ANDROID_ARCH_ABI STREQUAL "x86")
     target_compile_definitions(vine_core PUBLIC VINE_HOST_X86=1)
 endif()
 
-message(STATUS "VineOS native: ABI=${CMAKE_ANDROID_ARCH_ABI} API=${ANDROID_PLATFORM_LEVEL} BUILD=${CMAKE_BUILD_TYPE}")
+message(STATUS "Wayondroid native: ABI=${CMAKE_ANDROID_ARCH_ABI} API=${ANDROID_PLATFORM_LEVEL} BUILD=${CMAKE_BUILD_TYPE}")

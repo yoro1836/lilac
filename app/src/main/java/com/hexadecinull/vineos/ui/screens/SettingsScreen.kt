@@ -205,7 +205,7 @@ fun SettingsScreen(
             SettingsSection(title = "About") {
                 NavigateSettingsItem(
                     icon = Icons.Outlined.Info,
-                    title = "About VineOS",
+                    title = "About Wayondroid",
                     subtitle = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                     onClick = onAboutClick,
                 )

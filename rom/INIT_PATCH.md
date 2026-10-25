@@ -1,6 +1,6 @@
 # Making Android's init container aware
 
-Stock `init` assumes it owns the machine. In a VineOS instance it does not, and one thing in particular is dangerous: it loads its SELinux policy into the kernel it runs on, and that kernel is the phone's. The engine therefore refuses to start an `init` that does not contain the marker below.
+Stock `init` assumes it owns the machine. In a Wayondroid instance it does not, and one thing in particular is dangerous: it loads its SELinux policy into the kernel it runs on, and that kernel is the phone's. The engine therefore refuses to start an `init` that does not contain the marker below.
 
 ```
 VINE_CONTAINER_INIT_V1
