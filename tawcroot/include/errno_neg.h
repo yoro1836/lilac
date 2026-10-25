@@ -34,6 +34,7 @@
 #define TAWC_EBUSY         (-16)
 #define TAWC_EEXIST        (-17)
 #define TAWC_EXDEV         (-18)
+#define TAWC_ENODEV        (-19)
 #define TAWC_ENOTDIR       (-20)
 #define TAWC_EISDIR        (-21)
 #define TAWC_EINVAL        (-22)
@@ -48,7 +49,11 @@
 #define TAWC_ENODATA       (-61)
 #define TAWC_EOPNOTSUPP    (-95)
 #define TAWC_EPROTONOSUPPORT (-93)
+#define TAWC_EMSGSIZE      (-90)
 #define TAWC_EADDRINUSE    (-98)
+#define TAWC_EADDRNOTAVAIL (-99)
+#define TAWC_ENETUNREACH   (-101)
+#define TAWC_ECONNREFUSED  (-111)
 
 /* Compile-time guard against the previous positive-valued convention
  * silently coming back. If a future edit defines `TAWC_EINVAL` as `22`,

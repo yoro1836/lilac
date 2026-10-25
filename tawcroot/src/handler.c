@@ -23,6 +23,7 @@
 
 #include <linux/seccomp.h>
 
+#include "blocking.h"
 #include "arch.h"
 #include "chroot.h"
 #include "handler.h"
@@ -205,6 +206,10 @@ static void sigsys_handler(int sig, siginfo_t *info, void *ucontext)
 		TAWC_RAW(TAWC_SYS_write, 2, (long)line, (long)li, 0, 0, 0);
 	}
 #endif
+	if (rv == TAWC_ERESTARTSYS) {
+		tawcroot_arch_restart(uc);
+		resume_context(uc);
+	}
 	tawcroot_fastpath_note(&args, uc);
 	tawcroot_arch_write_return(uc, rv);
 	resume_context(uc);

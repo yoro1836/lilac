@@ -139,6 +139,8 @@ static bool build_rootfs(void)
 		  "static_mount_check" },
 		{ TAWCROOT_STATIC_NET_CHECK_BIN,
 		  "static_net_check" },
+		{ TAWCROOT_STATIC_FAKENET_CHECK_BIN,
+		  "static_fakenet_check" },
 		{ TAWCROOT_STATIC_STARTSTACK_CHECK_BIN,
 		  "static_startstack_check" },
 	};
@@ -782,6 +784,18 @@ test(prod_init_net)
 	const char *args[] = {
 		"-r", FAKE_ROOTFS, "-b", "/proc:/proc", "--init", "--",
 		"/bin/static_net_check", NULL
+	};
+	test_int_eq(run_with(args), 42);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+test(prod_init_fake_net)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "-b", "/proc:/proc", "-b", "/sys:/sys", "--init", "--fake-net", "--",
+		"/bin/static_fakenet_check", NULL
 	};
 	test_int_eq(run_with(args), 42);
 	rh_rmrf(FAKE_ROOTFS);

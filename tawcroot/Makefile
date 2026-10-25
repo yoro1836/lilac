@@ -141,6 +141,8 @@ PROD_C := \
     $(SRC_T)/src/mounts.c \
     $(SRC_T)/src/uts.c \
     $(SRC_T)/src/ports.c \
+    $(SRC_T)/src/netemu.c \
+    $(SRC_T)/src/blocking.c \
     $(SRC_T)/src/main.c \
     $(SRC_T)/src/io.c \
     $(SRC_T)/src/strings.c \
@@ -346,6 +348,12 @@ $(OUT)/programs/static_mount_check: $(SRC_TS)/integration/programs/static_mount_
 # static_net_check: static C (libc.a) — `--init` hostname and
 # privileged ports. See the source for exit codes.
 $(OUT)/programs/static_net_check: $(SRC_TS)/integration/programs/static_net_check.c | $(OUT)
+	@mkdir -p $(dir $@)
+	$(CC) -O2 -static -Wl,--build-id=none $< -o $@
+
+# static_fakenet_check: static C (libc.a) — `--init --fake-net` lo +
+# eth0 emulation. See the source for exit codes.
+$(OUT)/programs/static_fakenet_check: $(SRC_TS)/integration/programs/static_fakenet_check.c | $(OUT)
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -static -Wl,--build-id=none $< -o $@
 

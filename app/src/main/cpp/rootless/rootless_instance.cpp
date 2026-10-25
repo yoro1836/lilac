@@ -332,7 +332,7 @@ std::vector<std::string> Instance::guest_env() const {
 }
 
 bool Instance::launch_init(std::string* error) {
-    std::vector<std::string> argv = {cfg_.lib_dir + "/libtawcroot.so", "-r", layout_.rootfs, "--init", "--all-caps", "--cgroup", "--owners"};
+    std::vector<std::string> argv = {cfg_.lib_dir + "/libtawcroot.so", "-r", layout_.rootfs, "--init", "--all-caps", "--fake-net", "--cgroup", "--owners"};
     for (const auto& b : binds(layout_)) argv.push_back(b);
     for (const char* a : {"--", "/system/bin/init", "second_stage"}) argv.push_back(a);
     const auto env = guest_env();

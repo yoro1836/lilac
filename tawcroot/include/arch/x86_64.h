@@ -42,6 +42,12 @@ static inline uintptr_t tawcroot_arch_sp(const ucontext_t *uc)
 	return (uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
 }
 
+/* Back to the trapped `syscall`, rax still holding the nr. */
+static inline void tawcroot_arch_restart(ucontext_t *uc)
+{
+	uc->uc_mcontext.gregs[REG_RIP] -= 2;
+}
+
 static inline uintptr_t tawcroot_arch_resume_pc(const ucontext_t *uc)
 {
 	return (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];

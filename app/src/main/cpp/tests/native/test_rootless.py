@@ -321,6 +321,11 @@ def main():
     check(os.access(os.path.join(R, "system/bin/vine_lmkd"), os.X_OK), "lmkd installed")
     check("ro.sf.lcd_density=240" in read(os.path.join(R, "vendor/waydroid.prop")), "waydroid.prop density")
     check("<op n=\"24\"" in read(os.path.join(W, "data/system/appops.xml")), "appops seeded")
+    for d in ("data/misc/ethernet", "data/misc/apexdata/com.android.tethering/misc/ethernet"):
+        with open(os.path.join(W, d, "ipconfig.txt"), "rb") as f:
+            ipc = f.read()
+        check(ipc.startswith(b"\0\0\0\3\0\x0cipAssignment\0\x06STATIC\0\x0blinkAddress\0\x0910.0.2.15\0\0\0\x18") and
+              ipc.endswith(b"\0\x02id\0\x04eth0\0\x03eos"), "ethernet ipconfig: " + repr(ipc))
     check(os.readlink(os.path.join(R, "dev/binder")) == "binderfs/binder", "binder symlink")
     check(os.readlink(os.path.join(R, "apex/com.android.art")) == "/system/apex/com.android.art", "apex symlink")
     check(os.path.isdir(os.path.join(R, "dev/input")) and os.path.isfile(os.path.join(R, "dev/kmsg")), "dev dirs")

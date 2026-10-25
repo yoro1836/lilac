@@ -7,6 +7,8 @@
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
+#include <errno.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <stddef.h>
 #include <netinet/in.h>
@@ -18,6 +20,9 @@
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+static volatile sig_atomic_t chld_seen;
+static void on_chld(int sig) { (void)sig; chld_seen = 1; }
 
 static struct sockaddr_in lo(int port)
 {
@@ -109,5 +114,35 @@ int main(void)
 
 	struct __user_cap_header_struct h = { 0, 0 };
 	if (syscall(SYS_capget, &h, NULL) == 0 || h.version != _LINUX_CAPABILITY_VERSION_3) return 50;
+
+	/* A blocked accept still takes signals: with SA_RESTART the
+	 * handler runs and accept carries on, without it accept fails
+	 * EINTR (zygote reaps its children from SIGCHLD this way). */
+	struct sigaction sa = { 0 };
+	sa.sa_handler = on_chld;
+	sa.sa_flags = SA_RESTART;
+	if (sigaction(SIGCHLD, &sa, 0)) return 51;
+	us = socket(AF_UNIX, SOCK_STREAM, 0);
+	memcpy(ua.sun_path, "\0tawc-intr", 10);
+	if (us < 0 || bind(us, (struct sockaddr *)&ua, ul) != 0 || listen(us, 1) != 0) return 51;
+	pid_t quick = fork();
+	if (quick == 0) _exit(0);
+	pid_t late = fork();
+	if (late == 0) {
+		usleep(300000);
+		int s2 = socket(AF_UNIX, SOCK_STREAM, 0);
+		_exit(connect(s2, (struct sockaddr *)&ua, ul) ? 1 : 0);
+	}
+	pc = accept(us, 0, 0);
+	if (pc < 0 || !chld_seen) return 52;
+	close(pc);
+	while (waitpid(-1, &st, 0) > 0) {}
+	sa.sa_flags = 0;
+	if (sigaction(SIGCHLD, &sa, 0)) return 53;
+	chld_seen = 0;
+	quick = fork();
+	if (quick == 0) _exit(0);
+	pc = accept(us, 0, 0);
+	if (pc >= 0 || errno != EINTR || !chld_seen) return 53;
 	return 42;
 }

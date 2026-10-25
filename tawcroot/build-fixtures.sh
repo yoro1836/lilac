@@ -152,6 +152,7 @@ build_static_c static_init_check
 build_static_c static_cgroup_check
 build_static_c static_mount_check
 build_static_c static_net_check
+build_static_c static_fakenet_check
 build_static_c static_binder_check
 build_static_c static_owner_check
 build_static_c static_startstack_check

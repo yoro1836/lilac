@@ -16,6 +16,8 @@
 #include "filter.h"
 #include "io.h"
 #include "namespace.h"
+#include "netemu.h"
+#include "blocking.h"
 #include "raw_sys.h"
 #include "sysnr.h"
 #include "tawc_string.h"
@@ -146,8 +148,11 @@ static void unshift_msg(uint64_t gmsg)
 
 long tawcroot_ports_recv(const tawcroot_syscall_args *a, ucontext_t *uc)
 {
-    (void)uc;
     if (tawcroot_fd_is_reserved((int)a->a)) return TAWC_EBADF;
+    long ne = tawcroot_netemu_call(a, uc);
+    if (ne != TAWC_ENOSYS) return ne;
+    long flags = a->nr == TAWC_SYS_recvmsg ? a->c : a->d;
+    if (!(flags & 0x40 /*MSG_DONTWAIT*/) && (ne = tawcroot_wait_fd((int)a->a, 1 /*POLLIN*/, uc))) return ne;
     long rv = TAWC_RAW(a->nr, a->a, a->b, a->c, a->d, a->e, a->f);
     if (rv < 0 || !session()) return rv;
     if (a->nr == TAWC_SYS_recvfrom) {

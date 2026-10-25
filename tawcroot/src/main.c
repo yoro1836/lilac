@@ -48,6 +48,7 @@
 #include "namespace.h"
 #include "owners.h"
 #include "cgroup.h"
+#include "netemu.h"
 #include "mounts.h"
 #include "uts.h"
 #include "loader_exec.h"
@@ -223,7 +224,7 @@ static __attribute__((noreturn)) void usage(int code)
 	            "  tawcroot-testhost -r ROOTFS [-b SRC:DST[:ro]]...\n");
 #else
 	tawc_io_str("tawcroot: usage:\n"
-	            "  tawcroot -r ROOTFS [--host-user] [--init [--all-caps]] [--cgroup] [--owners] [-b SRC:DST[:ro]]... -- CMD [ARGS...]\n"
+	            "  tawcroot -r ROOTFS [--host-user] [--init [--all-caps] [--fake-net]] [--cgroup] [--owners] [-b SRC:DST[:ro]]... -- CMD [ARGS...]\n"
 	            "  tawcroot --exec-child <fd>\n");
 #endif
 	tawc_exit_group(code);
@@ -472,6 +473,7 @@ __attribute__((noreturn)) static void prod_main(int argc, char **argv)
 	int         init      = 0;
 	int         all_caps  = 0;
 	int         cgroup    = 0;
+	int         fake_net  = 0;
 	int         owners    = 0;
 
 	int i = 1;
@@ -489,6 +491,9 @@ __attribute__((noreturn)) static void prod_main(int argc, char **argv)
 			i++;
 		} else if (tawc_streq(argv[i], "--all-caps")) {
 			all_caps = 1;
+			i++;
+		} else if (tawc_streq(argv[i], "--fake-net")) {
+			fake_net = 1;
 			i++;
 		} else if (tawc_streq(argv[i], "--cgroup")) {
 			cgroup = 1;
@@ -522,7 +527,11 @@ __attribute__((noreturn)) static void prod_main(int argc, char **argv)
 		tawc_io_str("tawcroot: --init setup failed\n");
 		tawc_exit_group(96);
 	}
-	if (all_caps && !init) usage(2);
+	if ((all_caps || fake_net) && !init) usage(2);
+	if (fake_net && tawcroot_netemu_setup() < 0) {
+		tawc_io_str("tawcroot: --fake-net setup failed\n");
+		tawc_exit_group(96);
+	}
 	if (all_caps) tawcroot_namespace_all_caps();
 	/* Without a store there is no mount table and mount(2) stays EPERM. */
 	if (init) (void)tawcroot_mounts_setup();

@@ -46,6 +46,7 @@ static_init_check
 static_cgroup_check
 static_mount_check
 static_net_check
+static_fakenet_check
 static_binder_check
 static_owner_check
 static_startstack_check

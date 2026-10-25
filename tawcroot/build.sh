@@ -173,6 +173,8 @@ SRC_C_PROD=(
     "$TAWCROOT_DIR/src/cgroup.c"
     "$TAWCROOT_DIR/src/mounts.c"
     "$TAWCROOT_DIR/src/uts.c"
+    "$TAWCROOT_DIR/src/netemu.c"
+    "$TAWCROOT_DIR/src/blocking.c"
     "$TAWCROOT_DIR/src/ports.c"
     "$TAWCROOT_DIR/src/main.c"
     "$TAWCROOT_DIR/src/io.c"

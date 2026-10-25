@@ -6,6 +6,7 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include "namespace.h"
+#include "netemu.h"
 #include "loader_exec.h"
 #include "cgroup.h"
 #include "mounts.h"
@@ -611,7 +612,8 @@ static int valid_extent(const char *text)
 
 static long namespace_write(const tawcroot_syscall_args *a, ucontext_t *uc)
 {
-    (void)uc;
+    long ne = tawcroot_netemu_call(a, uc);
+    if (ne != TAWC_ENOSYS) return ne;
     long cg = tawcroot_cgroup_write((int)a->a, (const void *)a->b, (size_t)a->c);
     if (cg != TAWC_ENOSYS) return cg;
     if (tawcroot_namespace.user) {

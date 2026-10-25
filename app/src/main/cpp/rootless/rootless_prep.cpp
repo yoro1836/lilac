@@ -3,6 +3,7 @@
 #include "../utils/vine_utils.h"
 
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
@@ -136,6 +137,47 @@ std::string waydroid_prop(int dpi) {
 }
 
 // True for a 32-bit ELF file
+// java.io.DataOutputStream's writeUTF / writeInt
+void put_utf(std::string& out, const std::string& s) {
+    out += char(s.size() >> 8);
+    out += char(s.size() & 0xff);
+    out += s;
+}
+
+void put_int(std::string& out, uint32_t v) {
+    for (int shift = 24; shift >= 0; shift -= 8) out += char((v >> shift) & 0xff);
+}
+
+} // namespace
+
+// The fake eth0's static configuration, in IpConfigStore's format:
+// EthernetTracker brings eth0 up with it, no DHCP needed.
+std::string ethernet_ipconfig() {
+    std::string out;
+    put_int(out, 3);
+    put_utf(out, "ipAssignment");
+    put_utf(out, "STATIC");
+    put_utf(out, "linkAddress");
+    put_utf(out, "10.0.2.15");
+    put_int(out, 24);
+    put_utf(out, "gateway");
+    put_int(out, 0); // default route
+    put_int(out, 1);
+    put_utf(out, "10.0.2.2");
+    for (const char* dns : {"8.8.8.8", "1.1.1.1"}) {
+        put_utf(out, "dns");
+        put_utf(out, dns);
+    }
+    put_utf(out, "proxySettings");
+    put_utf(out, "NONE");
+    put_utf(out, "id");
+    put_utf(out, "eth0");
+    put_utf(out, "eos");
+    return out;
+}
+
+namespace {
+
 bool is_elf32(const std::string& path) {
     const auto head = read_file_prefix(path, 5);
     return head && head->size() == 5 && head->compare(0, 4, "\x7f" "ELF") == 0 && (*head)[4] == 1;
@@ -394,6 +436,12 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
                         "<uid n=\"1000\">\n<op n=\"24\" m=\"0\" />\n</uid>\n</pkg>\n</app-ops>\n")) {
             return fail(error, "could not write " + appops);
         }
+    }
+
+    // Read from the tethering apex's dir, migrated from the legacy one
+    for (const char* dir : {"/misc/ethernet", "/misc/apexdata/com.android.tethering/misc/ethernet"}) {
+        const std::string d = l.data + dir;
+        if (!mkdirs_or_fail(d, error) || !write_mode(d + "/ipconfig.txt", ethernet_ipconfig(), 0644, error)) return false;
     }
 
     // libbinder access()es the driver before opening it

@@ -23,6 +23,7 @@
 #include "errno_neg.h"
 #include "binder.h"
 #include "gamepad.h"
+#include "netemu.h"
 #include "fdtab.h"
 #include "io.h"
 #include "linkstore.h"
@@ -731,6 +732,8 @@ static long handle_ioctl(const tawcroot_syscall_args *args, ucontext_t *uc)
 	long fd  = args->a;
 	unsigned int cmd = (unsigned int)args->b;
 	long arg = args->c;
+	long ne = tawcroot_netemu_ioctl((int)fd, cmd, arg);
+	if (ne != TAWC_ENOSYS) return ne;
 	long gamepad = tawcroot_gamepad_ioctl((int)fd, cmd, arg);
 	if (gamepad != TAWC_ENOSYS) return gamepad;
 	long binder = tawcroot_binder_ioctl((int)fd, cmd, arg, uc);

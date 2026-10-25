@@ -43,6 +43,12 @@ static inline uintptr_t tawcroot_arch_sp(const ucontext_t *uc)
 	return (uintptr_t)uc->uc_mcontext.sp;
 }
 
+/* Back to the trapped `svc #0`, x0/x8 still holding arg0 and nr. */
+static inline void tawcroot_arch_restart(ucontext_t *uc)
+{
+	uc->uc_mcontext.pc -= 4;
+}
+
 static inline uintptr_t tawcroot_arch_resume_pc(const ucontext_t *uc)
 {
 	return (uintptr_t)uc->uc_mcontext.pc;

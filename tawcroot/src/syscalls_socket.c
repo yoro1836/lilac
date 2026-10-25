@@ -75,6 +75,8 @@
 #include "proc_tcp.h"
 #include "ports.h"
 #include "namespace.h"
+#include "netemu.h"
+#include "blocking.h"
 
 #define AF_UNIX_FAMILY  1
 #define AF_NETLINK_FAMILY  16
@@ -664,6 +666,8 @@ static void reverse_translate_unix_sockaddr(struct tawc_sockaddr_un *kern_addr,
 static long handle_bind(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
+	long ne = tawcroot_netemu_call(args, uc);
+	if (ne != TAWC_ENOSYS) return ne;
 	const void *addr = (const void *)(uintptr_t)args->b;
 	if (addr && (long)args->c >= (long)sizeof(uint16_t)) {
 		uint16_t fam;
@@ -689,6 +693,8 @@ static long handle_bind(const tawcroot_syscall_args *args, ucontext_t *uc)
 static long handle_connect(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
+	long ne = tawcroot_netemu_call(args, uc);
+	if (ne != TAWC_ENOSYS) return ne;
 	long result = tawcroot_ports_call(args);
 	if (result == TAWC_ENOSYS)
 		result = do_translate_unix_addr(TAWC_SYS_connect, args);
@@ -715,6 +721,8 @@ static long handle_sendto(const tawcroot_syscall_args *args, ucontext_t *uc)
 	(void)uc;
 	const void *dest = (const void *)(uintptr_t)args->e;
 	long addrlen = (long)args->f;
+	long ne = tawcroot_netemu_call(args, uc);
+	if (ne != TAWC_ENOSYS) return ne;
 	long pr = tawcroot_ports_call(args);
 	if (pr != TAWC_ENOSYS) return pr;
 	if (!dest || addrlen <= 0 || to_netlink_stub((int)args->a, dest, addrlen)) {
@@ -760,6 +768,8 @@ static long handle_sendmsg(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
 	const void *gmsg = (const void *)(uintptr_t)args->b;
+	long ne = tawcroot_netemu_call(args, uc);
+	if (ne != TAWC_ENOSYS) return ne;
 	if (!gmsg) {
 		return TAWC_RAW(TAWC_SYS_sendmsg, args->a, args->b, args->c,
 				0, 0, 0);
@@ -877,6 +887,8 @@ static long handle_getsockname(const tawcroot_syscall_args *args,
 			       ucontext_t *uc)
 {
 	(void)uc;
+	long ne = tawcroot_netemu_call(args, uc);
+	if (ne != TAWC_ENOSYS) return ne;
 	return getname_with_reverse(TAWC_SYS_getsockname, args->a,
 				    args->b, args->c, 0);
 }
@@ -885,6 +897,8 @@ static long handle_getpeername(const tawcroot_syscall_args *args,
 			       ucontext_t *uc)
 {
 	(void)uc;
+	long ne = tawcroot_netemu_call(args, uc);
+	if (ne != TAWC_ENOSYS) return ne;
 	return getname_with_reverse(TAWC_SYS_getpeername, args->a,
 				    args->b, args->c, 0);
 }
@@ -905,8 +919,9 @@ static long handle_getpeername(const tawcroot_syscall_args *args,
  * accepting server the HOST sun_path. */
 static long handle_accept(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
-	(void)uc;
-	long result = getname_with_reverse(TAWC_SYS_accept4, args->a,
+	long result = tawcroot_wait_fd((int)args->a, 1 /*POLLIN*/, uc);
+	if (result) return result;
+	result = getname_with_reverse(TAWC_SYS_accept4, args->a,
 				    args->b, args->c, 0);
 	if (result >= 0) tawcroot_tcp_record((int)result);
 	return result;
@@ -918,8 +933,9 @@ static long handle_accept(const tawcroot_syscall_args *args, ucontext_t *uc)
  * SOCK_CLOEXEC callers. */
 static long handle_accept4(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
-	(void)uc;
-	long result = getname_with_reverse(TAWC_SYS_accept4, args->a,
+	long result = tawcroot_wait_fd((int)args->a, 1 /*POLLIN*/, uc);
+	if (result) return result;
+	result = getname_with_reverse(TAWC_SYS_accept4, args->a,
 				    args->b, args->c, args->d);
 	if (result >= 0) tawcroot_tcp_record((int)result);
 	return result;
@@ -961,6 +977,8 @@ static long handle_getsockopt(const tawcroot_syscall_args *args, ucontext_t *uc)
 	(void)uc;
 	void *guest_val  = (void *)(uintptr_t)args->d;
 	void *guest_lenp = (void *)(uintptr_t)args->e;
+	long ne = tawcroot_netemu_call(args, uc);
+	if (ne != TAWC_ENOSYS) return ne;
 	if ((int)args->b != SOL_SOCKET_LEVEL ||
 	    (int)args->c != SO_PEERCRED_OPT || !guest_val || !guest_lenp) {
 		long result = TAWC_RAW(TAWC_SYS_getsockopt, args->a, args->b,
@@ -1022,6 +1040,8 @@ static long handle_socket(const tawcroot_syscall_args *args, ucontext_t *uc)
 	if ((int)args->a == AF_NETLINK_FAMILY &&
 	    (int)args->c == NETLINK_AUDIT_PROTO)
 		return TAWC_EPROTONOSUPPORT;
+	long ne = tawcroot_netemu_socket(args->a, args->b, args->c);
+	if (ne != TAWC_ENOSYS) return ne;
 	long rv = TAWC_RAW(TAWC_SYS_socket, args->a, args->b, args->c,
 			   0, 0, 0);
 	/* Substitute a silent stub only for listening sockets, and only
@@ -1053,4 +1073,6 @@ void tawcroot_socket_register(void)
 	tawcroot_dispatch_install(TAWC_SYS_getsockname, handle_getsockname);
 	tawcroot_dispatch_install(TAWC_SYS_getpeername, handle_getpeername);
 	tawcroot_dispatch_install(TAWC_SYS_getsockopt,  handle_getsockopt);
+	tawcroot_dispatch_install_lazy(TAWC_SYS_setsockopt, tawcroot_netemu_setsockopt);
+	tawcroot_dispatch_install_lazy(TAWC_SYS_read,       tawcroot_netemu_read);
 }
