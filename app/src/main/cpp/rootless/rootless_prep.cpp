@@ -88,11 +88,13 @@ std::string rootless_rc(bool own_audio_hal) {
         "    override\n"
         "\n"
         // Waydroid's statsd can't find libstatssocket (APEX library
-        // namespaces) and would restart every few seconds. Parsed before
-        // the APEX's own definition, so this one wins.
+        // namespaces) and would restart every few seconds (init.rc
+        // starts it by name, so `disabled` alone is not enough)
         "service statsd /apex/com.android.os.statsd/bin/statsd\n"
         "    class main\n"
         "    disabled\n"
+        "    oneshot\n"
+        "    override\n"
         "\n"
         // The engine's boot signal, in its /run/user/1000
         "on property:sys.boot_completed=1\n"
@@ -163,13 +165,16 @@ std::string drop_manifest_hal(const std::string& xml, const std::string& hal) {
     return out + xml.substr(pos);
 }
 
-// Vendor services the host can't run (32-bit only binaries): their rc
-// files go and so do their VINTF entries, so nothing waits for them
-// (system_server waits forever for a declared IOmxStore, hwservicemanager
-// keeps restarting it). `keep` is served by our own service instead.
-bool drop_32bit_vendor_services(const std::string& R, const std::string& keep, std::string* error) {
+// Services the host can't run (32-bit only binaries, e.g. mediaserver and
+// the omx HAL): their rc files go, and for vendor HALs their VINTF entries
+// too, so nothing waits for them (system_server waits forever for a
+// declared IOmxStore) and init does not restart them over and over.
+// `keep` is served by our own service instead.
+bool drop_32bit_services(const std::string& R, const std::string& keep, std::string* error) {
     std::vector<std::string> hals;
-    const std::string init_dir = R + "/vendor/etc/init";
+    for (const char* dir : {"/system/etc/init", "/vendor/etc/init"}) {
+    const bool vendor = dir[1] == 'v';
+    const std::string init_dir = R + dir;
     if (DIR* d = opendir(init_dir.c_str())) {
         std::vector<std::string> rcs;
         while (dirent* e = readdir(d)) {
@@ -195,8 +200,9 @@ bool drop_32bit_vendor_services(const std::string& R, const std::string& keep, s
             }
             if (!any || !all32) continue;
             if (unlink(rc.c_str()) != 0) return fail_errno(error, "remove " + rc);
-            hals.insert(hals.end(), rc_hals.begin(), rc_hals.end());
+            if (vendor) hals.insert(hals.end(), rc_hals.begin(), rc_hals.end());
         }
+    }
     }
     if (hals.empty()) return true;
     const std::string vintf = R + "/vendor/etc/vintf";
@@ -362,7 +368,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
             if (!write_mode(z + "/init.zygote64.rc", zygote64_rc(*z6432), 0644, error)) return false;
         }
         if (own_audio_hal && !copy_mode(hal_service, R + "/vendor/bin/hw/vine_hal_service", 0755, error)) return false;
-        if (!drop_32bit_vendor_services(R, own_audio_hal ? "android.hardware.audio.service" : "", error)) return false;
+        if (!drop_32bit_services(R, own_audio_hal ? "android.hardware.audio.service" : "", error)) return false;
     }
     if (!copy_mode(o.lib_dir + "/libvine_lmkd.so", R + "/system/bin/vine_lmkd", 0755, error)) return false;
     // $R/product is an absolute symlink, its files are in system/product

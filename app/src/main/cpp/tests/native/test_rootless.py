@@ -155,6 +155,10 @@ def build_images(top, inst, audio_hal_class=1):
                       ("android.hardware.light@2.0-service", 2)):
         with open(os.path.join(vend, "bin/hw", name), "wb") as f:
             f.write(elf(cls))
+    with open(os.path.join(sysd, "system/bin/mediaserver"), "wb") as f:
+        f.write(elf(1))
+    open(os.path.join(sysd, "system/etc/init/mediaserver.rc"), "w").write("service media /system/bin/mediaserver\n    class main\n")
+    open(os.path.join(sysd, "system/etc/init/init64.rc"), "w").write("service ok /system/bin/init\n    class main\n")
     os.makedirs(os.path.join(vend, "etc/init"), exist_ok=True)
     os.makedirs(os.path.join(vend, "etc/vintf/manifest"), exist_ok=True)
     for rc, svc, name in (("audio.rc", "vendor.audio-hal", "android.hardware.audio.service"),
@@ -327,6 +331,8 @@ def main():
     check("media.omx" not in man and "<name>android.hardware.light</name>" in man and man.count("<hal") == 1, "manifest: " + man)
     check("media.omx" not in read(os.path.join(R, "vendor/etc/vintf/manifest/omx.xml")), "manifest fragment")
     check("service statsd" in rc, "statsd disabled")
+    sys_init = os.listdir(os.path.join(R, "system/etc/init"))
+    check("mediaserver.rc" not in sys_init and "init64.rc" in sys_init, "32-bit system service dropped: " + str(sys_init))
     check("--create 640x480" in read(os.path.join(W, "wl-args.txt")), "display size")
     check(os.path.isfile(os.path.join(inst, "shared/vinefb")), "vinefb created")
     check("/system/bin" in read(os.path.join(W, "init-env.txt")), "init gets the guest PATH")
