@@ -1,0 +1,35 @@
+From: tawc
+Origin: own
+
+Honour `VIRTGPU_KUMQUAT_GPU_SOCKET` as an absolute path to the
+kumquat server's listening socket. Falls through to the upstream
+`/tmp/kumquat-gpu-<descriptor>` default when unset.
+
+Tawc's compositor runs the kumquat server in-process and binds the
+socket inside the app's private data dir (`<appData>/share/`) which
+is bind-mounted into every rootfs at `/usr/share/tawc/`. The chroot
+client ends up with `/usr/share/tawc/kumquat-gpu-0`, not
+`/tmp/kumquat-gpu-0`. Faking the path via a /tmp symlink works but
+puts more state in the rootfs than necessary; a single env var on
+the client side is cleaner and matches the `VIRTGPU_KUMQUAT=1`
+toggle that already lives next to it.
+
+diff --git a/src/gfxstream/guest/platform/kumquat/VirtGpuKumquatDevice.cpp b/src/gfxstream/guest/platform/kumquat/VirtGpuKumquatDevice.cpp
+--- a/src/gfxstream/guest/platform/kumquat/VirtGpuKumquatDevice.cpp
++++ b/src/gfxstream/guest/platform/kumquat/VirtGpuKumquatDevice.cpp
+@@ -55,6 +55,15 @@
+     } else {
+         gpu_socket_path.append("0");
+     }
++
++    // tawc-fork: env-var override for the socket path. The tawc
++    // compositor binds kumquat at /usr/share/tawc/kumquat-gpu-0
++    // inside each rootfs (via the host-side share bind), not at
++    // /tmp/... .
++    const char* env_socket = getenv("VIRTGPU_KUMQUAT_GPU_SOCKET");
++    if (env_socket && *env_socket) {
++        gpu_socket_path = env_socket;
++    }
+ 
+     ret = virtgpu_kumquat_init(&mVirtGpu, gpu_socket_path.c_str());
+     if (ret) {

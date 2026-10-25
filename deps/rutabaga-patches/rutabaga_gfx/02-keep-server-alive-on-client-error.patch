@@ -1,0 +1,94 @@
+From: tawc
+Origin: own
+
+Make Kumquat::run robust to two client-lifecycle events that
+upstream's loop mishandles, both of which we hit constantly.
+
+1. Per-client backend error. Upstream
+   `gpu_conn.process_command(...)?` propagates per-request failures
+   to Kumquat::run, where they short-circuit the whole event loop
+   and exit main(). A guest hitting an unimplemented backend path
+   (e.g. gfxstream's PLATFORM_AHB export, which our
+   01-drop-nativewindow-dep.patch surfaces as InvalidResourceId)
+   takes the daemon with it. We absorb the error into "drop just
+   this connection" plus an eprintln, so the failing client gets
+   EOF on its socket and the next reconnect / sibling chroot keeps
+   working. The connection's resources die through
+   `o.remove_entry()` → KumquatGpuConnection::Drop, same path as a
+   normal disconnect.
+
+2. Peer EOF / busy spin. The bool returned from process_command is
+   true iff recv() returned 0 bytes — `kumquat_stream.rs` pushes
+   `OkNoData` and `kumquat_gpu/mod.rs` sets the flag. Upstream's
+       hung_up = !peer_eof && event.hung_up;
+   never fires on the common case "peer closed cleanly after
+   draining": `!peer_eof` flips to false and we don't drop. The
+   closed FD then stays in wait_ctx; epoll is level-triggered with
+   `EventFlags::IN` registered (mesa3d/.../linux/wait_context.rs)
+   and EPOLLHUP/EPOLLIN are sticky on a closed peer, so wait()
+   returns immediately every iteration and Kumquat::run busy-spins
+   at 100% CPU per leaked connection. Tawc hit this every time a
+   chroot-side gfxstream-vk client process exited.
+
+   Fix the condition to drop on peer EOF, and add a sibling
+   `else if event.hung_up` arm so half-closed wakeups with no
+   readable data are still cleaned out of wait_ctx (a defensive
+   guard — current epoll/SEQPACKET semantics report EPOLLIN
+   alongside EPOLLHUP, but the logic is one line and we'd rather
+   not depend on that).
+
+Local rename `no_more_data → peer_eof` is just clarity — the bool
+really does mean "peer hit EOF", not "we drained the buffer for
+now". The old name is what made upstream's condition look
+plausible at a glance.
+
+diff --git a/kumquat/server/src/kumquat.rs b/kumquat/server/src/kumquat.rs
+index a4906e5..c7df74f 100644
+--- a/kumquat/server/src/kumquat.rs
++++ b/kumquat/server/src/kumquat.rs
+@@ -56,9 +56,43 @@ impl Kumquat {
+                         KumquatConnection::GpuConnection(ref mut gpu_conn) => {
+                             if event.readable {
+                                 if let Some(ref mut kumquat_gpu) = self.kumquat_gpu_opt {
+-                                    hung_up =
+-                                        !gpu_conn.process_command(kumquat_gpu)? && event.hung_up;
++                                    // tawc-fork: two changes vs upstream
++                                    // (see 02-keep-server-alive-on-
++                                    // client-error.patch header):
++                                    //  1. absorb per-client errors into
++                                    //     "drop just this connection"
++                                    //     so one bad request can't
++                                    //     take the whole server down.
++                                    //  2. drop on peer EOF — the bool
++                                    //     returned by process_command
++                                    //     is true iff recv() returned
++                                    //     0 bytes, and upstream's
++                                    //     `!peer_eof && event.hung_up`
++                                    //     never fires for the common
++                                    //     "peer closed cleanly" case.
++                                    //     Leaving the closed FD in
++                                    //     wait_ctx makes Kumquat::run
++                                    //     busy-spin (epoll level-
++                                    //     triggered, EPOLLHUP sticky).
++                                    match gpu_conn.process_command(kumquat_gpu) {
++                                        Ok(peer_eof) => {
++                                            hung_up = peer_eof || event.hung_up;
++                                        }
++                                        Err(e) => {
++                                            eprintln!(
++                                                "kumquat: dropping connection {} after error: {:?}",
++                                                event.connection_id, e
++                                            );
++                                            hung_up = true;
++                                        }
++                                    }
+                                 }
++                            } else if event.hung_up {
++                                // tawc-fork: half-closed FD with no
++                                // readable data — still remove from
++                                // wait_ctx, otherwise EPOLLHUP keeps
++                                // firing level-triggered.
++                                hung_up = true;
+                             }
+
+                             if hung_up {

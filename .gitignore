@@ -133,3 +133,7 @@ nbandroid/
 
 # tawcroot test dep, cloned by scripts/lib/deps.sh
 deps/cleat/
+# GPU deps, cloned by scripts/lib/deps.sh
+deps/mesa/
+deps/gfxstream/
+deps/rutabaga_gfx/

@@ -1,0 +1,285 @@
+From: tawc
+Origin: own
+
+Cross-build the gfxstream host renderer (libgfxstream_backend.so) for
+Android NDK. Upstream's meson build only knows linux/darwin/windows/qnx
+host platforms — Android is built via Soong inside AOSP and isn't
+reachable from a standalone NDK toolchain. We need it from outside AOSP
+for the gfxstream-bridge GPU path (notes/gfxstream-bridge.md), where a
+kumquat server inside the Tawc compositor app forwards Vulkan command
+streams from the chroot to the device's vendor blob via gfxstream's
+EGL-on-EGL + dlopen("libvulkan.so") backend.
+
+Changes:
+
+  meson.build:
+    - Add an 'android' branch alongside 'linux' (UNSTABLE_VULKAN_*
+      and threads).
+    - Define -DANDROID=1 — NDK clang defines __ANDROID__ but not the
+      bare ANDROID macro that egl_global_info.cpp / egl_os_api_egl.cpp /
+      vk_android_native_buffer_gfxstream.h check for.
+    - Don't add -DHAVE_MEMFD_CREATE on Android: NDK exposes the
+      function only since API 30, and SharedMemory_posix.cpp's syscall
+      fallback works on every kernel that ships with Android 11+ (the
+      bridge's effective floor anyway).
+
+  host/meson.build:
+    - native_sub_window_android.cpp on Android (already in tree —
+      wraps ANativeWindow_*).
+    - VK_USE_PLATFORM_ANDROID_KHR instead of VK_USE_PLATFORM_XCB_KHR.
+    - Link against -lnativewindow (AHardwareBuffer_*), -landroid
+      (ANativeWindow_*), -llog (__android_log_print).
+
+  host/decoder_common/meson.build,
+  host/vulkan/{meson.build,cereal/meson.build,emulated_textures/meson.build}:
+    - Skip X11Support.cpp; pick VK_USE_PLATFORM_ANDROID_KHR for
+      android (mirrors the linux branches structurally).
+
+  host/gl/glestranslator/egl/meson.build:
+    - Document that Android only takes the EGL-on-EGL backend
+      (egl_os_api_egl.cpp, always included). egl_global_info.cpp
+      switches on `defined(ANDROID)`.
+
+  host/gl/glestranslator/common/gl_dispatch.cpp:
+    - Don't include <GL/glx.h> on android. NDK clang defines __linux__,
+      and gfxstream's existing #ifdef __linux__ would otherwise pull
+      GLX in.
+
+  host/frame_buffer.h, host/native_sub_window.h:
+    - Fix the case-mismatch include ("GlesCompat.h" → "gles_compat.h").
+      The actual file is lowercase; the existing Linux host build
+      doesn't notice because it always has GFXSTREAM_ENABLE_HOST_GLES
+      defined and takes the alternate include.
+
+  host/native_sub_window_stub.cpp:
+    - Include <stdio.h> for stderr/fprintf.
+
+  host/vulkan/vk_decoder_global_state.cpp:
+    - Replace <vndk/hardware_buffer.h> (vendor-process only — not in
+      NDK) with <android/hardware_buffer.h>. The translation unit only
+      uses plain AHardwareBuffer*, so the NDK header covers it.
+
+  third_party/meson.build:
+    - Expose `inc_third_party_android` for android targets, used by
+      the build script to surface cutils/native_handle.h (which the
+      NDK doesn't ship; libcutils is part of AOSP). The build script
+      copies just the cutils/ subtree into a shims dir and -I's that —
+      it does NOT add the full third_party/android/include path
+      because that would shadow the NDK's own android/* headers.
+
+diff --git a/host/decoder_common/meson.build b/host/decoder_common/meson.build
+index 7cae2ad..cd715d5 100644
+--- a/host/decoder_common/meson.build
++++ b/host/decoder_common/meson.build
+@@ -12,7 +12,7 @@ files_lib_host_decoder_common = files(
+   'glUtils.cpp',
+ )
+ 
+-if host_machine.system() == 'linux'
++if host_machine.system() == 'linux' and get_option('decoders').contains('gles')
+   files_lib_host_decoder_common += files('X11Support.cpp')
+ endif
+ 
+diff --git a/host/frame_buffer.h b/host/frame_buffer.h
+index a39b788..3a368e4 100644
+--- a/host/frame_buffer.h
++++ b/host/frame_buffer.h
+@@ -25,7 +25,7 @@
+ #include <GLES2/gl2.h>
+ #include <GLES2/gl2ext.h>
+ #else
+-#include "GlesCompat.h"
++#include "gles_compat.h"
+ #endif  // GFXSTREAM_ENABLE_HOST_GLES
+ #include <vulkan/vulkan.h>
+ 
+diff --git a/host/gl/glestranslator/common/gl_dispatch.cpp b/host/gl/glestranslator/common/gl_dispatch.cpp
+index f2b9f42..d03c1c1 100644
+--- a/host/gl/glestranslator/common/gl_dispatch.cpp
++++ b/host/gl/glestranslator/common/gl_dispatch.cpp
+@@ -21,7 +21,7 @@
+ #include "gfxstream/synchronization/Lock.h"
+ #include "gfxstream/common/logging.h"
+ 
+-#ifdef __linux__
++#if defined(__linux__) && !defined(__ANDROID__)
+ #include <GL/glx.h>
+ #elif defined(WIN32)
+ #include <windows.h>
+diff --git a/host/gl/glestranslator/egl/meson.build b/host/gl/glestranslator/egl/meson.build
+index 12695b2..801cf2e 100644
+--- a/host/gl/glestranslator/egl/meson.build
++++ b/host/gl/glestranslator/egl/meson.build
+@@ -46,6 +46,10 @@ elif host_machine.system() == 'windows'
+ elif host_machine.system() == 'linux'
+   files_lib_egl_translator += files_egl_linux
+ endif
++# Android: only the EGL-on-EGL backend (egl_os_api_egl.cpp, always
++# included). No GLX / X11 platform sources — egl_global_info.cpp's
++# defined(ANDROID) branch routes all GL through Android's libEGL via
++# dlopen.
+ 
+ lib_egl_translator = static_library(
+   'egl_translator',
+diff --git a/host/meson.build b/host/meson.build
+index 54b7c49..93430ab 100644
+--- a/host/meson.build
++++ b/host/meson.build
+@@ -130,6 +130,8 @@ elif host_machine.system() == 'darwin'
+   files_lib_gfxstream_backend += files('native_sub_window_cocoa.mm')
+ elif host_machine.system() == 'windows'
+   files_lib_gfxstream_backend += files('native_sub_window_win32.cpp')
++elif host_machine.system() == 'android'
++  files_lib_gfxstream_backend += files('native_sub_window_android.cpp')
+ elif host_machine.system() == 'linux' and use_gles
+   files_lib_gfxstream_backend += files('native_sub_window_x11.cpp')
+ elif host_machine.system() == 'qnx'
+@@ -153,6 +155,8 @@ elif host_machine.system() == 'darwin'
+   gfxstream_backend_cpp_args += '-DVK_USE_PLATFORM_MACOS_MVK'
+ elif host_machine.system() == 'linux'
+   gfxstream_backend_cpp_args += '-DVK_USE_PLATFORM_XCB_KHR'
++elif host_machine.system() == 'android'
++  gfxstream_backend_cpp_args += '-DVK_USE_PLATFORM_ANDROID_KHR'
+ endif
+ 
+ deps_gfxstream_backend = []
+@@ -164,6 +168,14 @@ if host_machine.system() == 'linux'
+     thread_dep,
+   ]
+   link_args_gfxstream_backend = '-Wl,-lpthread,-lrt,-ldl'
++elif host_machine.system() == 'android'
++  deps_gfxstream_backend += [
++    thread_dep,
++  ]
++  # Android: -ldl for dlopen (libvulkan.so / libEGL.so), -lnativewindow
++  # for AHardwareBuffer_*, -landroid for ANativeWindow_*, -llog for
++  # __android_log_print.
++  link_args_gfxstream_backend = ['-Wl,-ldl,-lnativewindow,-landroid,-llog']
+ endif
+ 
+ if host_machine.system() == 'qnx'
+diff --git a/host/native_sub_window.h b/host/native_sub_window.h
+index 87a6f41..3791a9e 100644
+--- a/host/native_sub_window.h
++++ b/host/native_sub_window.h
+@@ -21,7 +21,7 @@
+ #if GFXSTREAM_ENABLE_HOST_GLES
+ #include <EGL/egl.h>
+ #else
+-#include "GlesCompat.h"
++#include "gles_compat.h"
+ #endif
+ 
+ #ifdef __cplusplus
+diff --git a/host/native_sub_window_stub.cpp b/host/native_sub_window_stub.cpp
+index c4379bc..1d0e894 100644
+--- a/host/native_sub_window_stub.cpp
++++ b/host/native_sub_window_stub.cpp
+@@ -14,6 +14,8 @@
+  * limitations under the License.
+  */
+ 
++#include <stdio.h>
++
+ #include "gles_compat.h"
+ #include "native_sub_window.h"
+ 
+diff --git a/host/vulkan/cereal/meson.build b/host/vulkan/cereal/meson.build
+index 2d03c20..b032288 100644
+--- a/host/vulkan/cereal/meson.build
++++ b/host/vulkan/cereal/meson.build
+@@ -24,6 +24,8 @@ elif host_machine.system() == 'darwin'
+   cereal_cpp_args += '-DVK_USE_PLATFORM_MACOS_MVK'
+ elif host_machine.system() == 'linux'
+   cereal_cpp_args += '-DVK_USE_PLATFORM_XCB_KHR'
++elif host_machine.system() == 'android'
++  cereal_cpp_args += '-DVK_USE_PLATFORM_ANDROID_KHR'
+ endif
+ 
+ lib_vulkan_cereal = static_library(
+diff --git a/host/vulkan/emulated_textures/meson.build b/host/vulkan/emulated_textures/meson.build
+index 56eed17..da38bb4 100644
+--- a/host/vulkan/emulated_textures/meson.build
++++ b/host/vulkan/emulated_textures/meson.build
+@@ -18,6 +18,8 @@ elif host_machine.system() == 'darwin'
+   emulated_texture_args += '-DVK_USE_PLATFORM_MACOS_MVK'
+ elif host_machine.system() == 'linux'
+   emulated_texture_args += '-DVK_USE_PLATFORM_XCB_KHR'
++elif host_machine.system() == 'android'
++  emulated_texture_args += '-DVK_USE_PLATFORM_ANDROID_KHR'
+ endif
+ 
+ lib_emulated_textures = static_library(
+diff --git a/host/vulkan/meson.build b/host/vulkan/meson.build
+index 499a13b..ab62ea5 100644
+--- a/host/vulkan/meson.build
++++ b/host/vulkan/meson.build
+@@ -64,6 +64,8 @@ elif host_machine.system() == 'qnx'
+   vulkan_server_cpp_args += '-DVK_USE_PLATFORM_SCREEN_QNX'
+ elif host_machine.system() == 'linux'
+   vulkan_server_cpp_args += '-DVK_USE_PLATFORM_XCB_KHR'
++elif host_machine.system() == 'android'
++  vulkan_server_cpp_args += '-DVK_USE_PLATFORM_ANDROID_KHR'
+ endif
+ 
+ lib_vulkan_server = static_library(
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 03ff610..ca30566 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -27,7 +27,10 @@
+ #endif
+ 
+ #ifdef __ANDROID__
+-#include <vndk/hardware_buffer.h>
++// NDK exposes <android/hardware_buffer.h>; <vndk/...> is vendor-process
++// only. The code only uses plain AHardwareBuffer*, so the NDK header
++// provides everything needed for this translation unit.
++#include <android/hardware_buffer.h>
+ #endif
+ 
+ #ifdef __APPLE__
+diff --git a/meson.build b/meson.build
+index adb48cb..64303ba 100644
+--- a/meson.build
++++ b/meson.build
+@@ -78,6 +78,21 @@ elif host_machine.system() == 'linux'
+   gfxstream_host_args += '-DGFXSTREAM_UNSTABLE_VULKAN_EXTERNAL_SYNC=1'
+   gfxstream_host_args += '-DGFXSTREAM_UNSTABLE_VULKAN_BLOB_COLOR_BUFFER=1'
+   gfxstream_host_args += '-DHAVE_MEMFD_CREATE=1'
++elif host_machine.system() == 'android'
++  thread_dep = dependency('threads')
++  gfxstream_host_args += '-DGFXSTREAM_UNSTABLE_VULKAN_EXTERNAL_SYNC=1'
++  gfxstream_host_args += '-DGFXSTREAM_UNSTABLE_VULKAN_BLOB_COLOR_BUFFER=1'
++  # NDK clang defines __ANDROID__ but not the bare `ANDROID` macro;
++  # several files (egl_global_info.cpp, egl_os_api_egl.cpp,
++  # vk_android_native_buffer_gfxstream.h, …) check `#if defined(ANDROID)`
++  # to pick the Android code path. Define it explicitly so they take
++  # the right branch.
++  gfxstream_host_args += '-DANDROID=1'
++  # NDK exposes memfd_create(3) only since API 30. We compile against
++  # API 28 to match the app's minSdk; SharedMemory_posix.cpp falls
++  # through to a __NR_memfd_create syscall when HAVE_MEMFD_CREATE is
++  # undefined, which works on every kernel that ships with Android 11+
++  # (the bridge backend's effective floor).
+ else
+   thread_dep = dependency('threads')
+ endif
+diff --git a/third_party/meson.build b/third_party/meson.build
+index 9dcda01..cb899ad 100644
+--- a/third_party/meson.build
++++ b/third_party/meson.build
+@@ -23,3 +23,13 @@ inc_opengl_headers = include_directories('opengl/include')
+ inc_common_opengl = include_directories('opengl/include')
+ inc_drm_headers = include_directories('drm/include')
+ 
++# Android: gfxstream-internal headers under cutils/, vndk/, android/
++# that aren't shipped in the NDK (cutils/native_handle.h, etc.).
++# We bring them in as a header-only include path for android targets
++# only — they shouldn't shadow the NDK's own android/* headers.
++if host_machine.system() == 'android'
++  inc_third_party_android = include_directories('android/include')
++else
++  inc_third_party_android = include_directories()
++endif
++

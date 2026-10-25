@@ -1,0 +1,18 @@
+[package]
+name = "vine_kumquat"
+version = "0.1.0"
+edition = "2021"
+description = "Wayondroid's GPU server: kumquat over the gfxstream host renderer"
+license = "MIT"
+
+[[bin]]
+name = "vine_kumquat"
+path = "src/main.rs"
+
+[dependencies]
+kumquat_virtio = { path = "../../deps/rutabaga_gfx/kumquat/server", features = ["gfxstream"] }
+libc = "0.2"
+
+[profile.release]
+panic = "abort"
+lto = true

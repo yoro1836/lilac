@@ -1,0 +1,52 @@
+From: tawc
+Origin: own
+
+Expose `kumquat::KumquatBuilder` and friends as a library so the
+compositor can run kumquat in-process on a dedicated thread instead
+of spawning the upstream `kumquat` binary as a separate Android
+process. Same code, different entry point.
+
+Why in-process: kumquat's SCM_RIGHTS fd-passing requires the server
+and the chroot client to share an SELinux domain (see
+notes/gfxstream-bridge.md "Why kumquat must run as untrusted_app").
+Running kumquat as a thread of the compositor app collapses that
+constraint trivially — same uid, same context — and removes the
+broker daemon spawn / pidfile / lifecycle plumbing.
+
+The added `lib.rs` is a thin re-export. `main.rs` keeps building
+unchanged: cargo allows a single crate to ship both `[[bin]]` and
+`[lib]`, and the bin still references `kumquat::KumquatBuilder`
+through its own `mod kumquat;` decl. We also re-export
+`rutabaga_gfx` so embedders can reach `rutabaga_gfx::gfxstream`'s
+AHB-cookie-export hook (see 04-ahb-cookie-export-hook.patch)
+without a separate Cargo dep entry.
+
+diff --git a/kumquat/server/Cargo.toml b/kumquat/server/Cargo.toml
+--- a/kumquat/server/Cargo.toml
++++ b/kumquat/server/Cargo.toml
+@@ -8,6 +8,10 @@ description = "A Rust server designed for virtio-multimedia use cases"
+ repository = "https://github.com/magma-gpu/rutabaga_gfx"
+ rust-version = "1.81.0"
+
++[lib]
++name = "kumquat_virtio"
++path = "src/lib.rs"
++
+ [[bin]]
+ name = "kumquat"
+ path = "src/main.rs"
+diff --git a/kumquat/server/src/lib.rs b/kumquat/server/src/lib.rs
+new file mode 100644
+--- /dev/null
++++ b/kumquat/server/src/lib.rs
+@@ -0,0 +1,10 @@
++// tawc-fork: lib target for the kumquat server modules so embedders
++// (the tawc compositor) can spin up `KumquatBuilder` on a thread
++// instead of forking the upstream `kumquat` binary.
++
++pub mod kumquat;
++pub mod kumquat_gpu;
++
++// Re-export rutabaga_gfx so embedders can reach gfxstream's
++// AHB-cookie-export hook (see 04-ahb-cookie-export-hook.patch).
++pub use rutabaga_gfx;

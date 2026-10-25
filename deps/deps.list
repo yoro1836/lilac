@@ -27,3 +27,6 @@
 
 # name              repo                                                                  commit                                      ref-hint                       dest
 cleat	https://codeberg.org/sphi/cleat.git	f53455f54700d7238097f903f461b85b41bfbd38	main	deps/cleat
+mesa	https://gitlab.freedesktop.org/mesa/mesa.git	06f9e28304d5d3f109c33535c1c25b9df5769af2	mesa-25.3.6	deps/mesa
+gfxstream	https://github.com/google/gfxstream.git	7f77a8faf1d67311deec9d9a1e5301223c06a039	main	deps/gfxstream
+rutabaga_gfx	https://github.com/magma-gpu/rutabaga_gfx.git	2f0c6a55fd36e61b22a1b3679f69d4273c056602	main	deps/rutabaga_gfx

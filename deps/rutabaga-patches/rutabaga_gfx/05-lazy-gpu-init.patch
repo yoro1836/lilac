@@ -1,0 +1,45 @@
+From: tawc
+Origin: own
+
+Lazy-init kumquat's GPU renderer after the first client connects.
+
+The tawc compositor starts kumquat unconditionally when gfxstream is
+compiled in so the socket is available for gfxstream-vk clients. Before
+this patch, `KumquatBuilder::build()` also constructed `KumquatGpu`,
+which loads and initializes gfxstream's host renderer. Any renderer
+abort therefore killed tawc at app startup, even if the user was using
+libhybris or CPU rendering.
+
+Bind the listener during build, keep the renderer config on `Kumquat`,
+and construct `KumquatGpu` after accepting the first client. The first
+gfxstream client pays the init cost; non-gfxstream users never do.
+
+diff --git a/kumquat/server/src/kumquat.rs b/kumquat/server/src/kumquat.rs
+--- a/kumquat/server/src/kumquat.rs
++++ b/kumquat/server/src/kumquat.rs
+@@ -22,6 +22,8 @@ pub struct Kumquat {
+     connection_id: u64,
+     wait_ctx: WaitContext,
+     kumquat_gpu_opt: Option<KumquatGpu>,
++    capset_names: String,
++    renderer_features: String,
+     gpu_listener_opt: Option<Listener>,
+     connections: Map<u64, KumquatConnection>,
+ }
+@@ -36,6 +38,16 @@ impl Kumquat {
+                         KumquatConnection::GpuListener => {
+                             if let Some(ref listener) = self.gpu_listener_opt {
+                                 let stream = listener.accept()?;
++                                if self.kumquat_gpu_opt.is_none() {
++                                    // tawc-fork: build the renderer only
++                                    // after a client connects. This keeps
++                                    // gfxstream host init out of app
++                                    // startup for non-gfxstream users.
++                                    self.kumquat_gpu_opt = Some(KumquatGpu::new(
++                                        self.capset_names.clone(),
++                                        self.renderer_features.clone(),
++                                    )?);
++                                }
+                                 self.connection_id += 1;
+                                 let new_gpu_conn = KumquatGpuConnection::new(stream);
+                                 self.wait_ctx.add(

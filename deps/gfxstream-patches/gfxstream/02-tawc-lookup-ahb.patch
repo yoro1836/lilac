@@ -1,0 +1,72 @@
+From: tawc
+Origin: own
+
+Add a tawc-namespaced C entry point inside libgfxstream_backend.so
+that maps a gfxstream ColorBuffer handle to its AHardwareBuffer*.
+
+The compositor uses this from the `tawc_gfxstream` Wayland handler:
+the chroot presents only a ColorBuffer id, and the compositor imports
+the resolved AHB through the existing android_wlegl texture path.
+
+The symbol lives in frame_buffer.cpp so it can use gfxstream's private
+types without dragging the full gfxstream include tree into the Rust
+crate. The returned AHB has a bumped refcount (we call
+AHardwareBuffer_acquire — exportColorBuffer / dupExternalMemory on
+Android does not do it), so the caller must release it.
+
+See notes/gfxstream-bridge.md "WSI plan: custom Vulkan WSI" for
+the surrounding design.
+
+diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
+index 875be4e..c6e6a95 100644
+--- a/host/frame_buffer.cpp
++++ b/host/frame_buffer.cpp
+@@ -16,6 +16,10 @@
+ 
+ #include "frame_buffer.h"
+ 
++#if defined(__ANDROID__)
++#include <android/hardware_buffer.h>
++#endif
++
+ #include <stdio.h>
+ #include <string.h>
+ #include <time.h>
+@@ -5666,3 +5670,37 @@ void FrameBuffer::applyScreenshotBackground(const int width, const int height,
+ 
+ }  // namespace host
+ }  // namespace gfxstream
++
++#if defined(__ANDROID__)
++// tawc-fork: resolve a gfxstream ColorBuffer handle to its AHB.
++// The returned AHB has refcount += 1 (we call AHardwareBuffer_acquire);
++// caller must release it. exportColorBuffer / dupExternalMemory on
++// Android does not bump the refcount on its own (`AHardwareBuffer*` is
++// not "duped"), so we have to do it here.
++extern "C" AHardwareBuffer* tawc_gfxstream_lookup_ahb(uint32_t handle) {
++    auto* fb = gfxstream::host::FrameBuffer::getFB();
++    if (!fb) {
++        GFXSTREAM_ERROR("tawc_gfxstream_lookup_ahb(%u): FrameBuffer not initialized", handle);
++        return nullptr;
++    }
++    auto info = fb->exportColorBuffer(static_cast<gfxstream::host::HandleType>(handle));
++    if (!info) {
++        GFXSTREAM_ERROR(
++            "tawc_gfxstream_lookup_ahb(%u): exportColorBuffer returned nullopt; "
++            "ColorBuffer not in FrameBuffer", handle);
++        return nullptr;
++    }
++    // descriptorInfo.handle is int64_t on Android, holding an
++    // AHardwareBuffer* (see external_object_manager.h, ExternalHandleInfo).
++    AHardwareBuffer* ahb = reinterpret_cast<AHardwareBuffer*>(
++        static_cast<intptr_t>(info->descriptorInfo.handle));
++    if (!ahb) {
++        GFXSTREAM_ERROR(
++            "tawc_gfxstream_lookup_ahb(%u): exportColorBuffer ok but descriptorInfo.handle "
++            "is null", handle);
++        return nullptr;
++    }
++    AHardwareBuffer_acquire(ahb);
++    return ahb;
++}
++#endif  // __ANDROID__
