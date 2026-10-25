@@ -7,6 +7,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <climits>
 #include <dirent.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -111,6 +112,27 @@ std::vector<pid_t> children_of(pid_t parent) {
     for (pid_t p : all_pids())
         if (parent_of(p) == parent) out.push_back(p);
     return out;
+}
+
+// The file name of pid's executable, without a deleted file's suffix
+std::string exe_name(pid_t pid) {
+    char buf[PATH_MAX];
+    const ssize_t n = readlink(("/proc/" + std::to_string(pid) + "/exe").c_str(), buf, sizeof buf - 1);
+    if (n <= 0) return {};
+    std::string exe(buf, (size_t)n);
+    const std::string deleted = " (deleted)";
+    if (exe.size() > deleted.size() && exe.compare(exe.size() - deleted.size(), deleted.size(), deleted) == 0)
+        exe.resize(exe.size() - deleted.size());
+    return exe.substr(exe.rfind('/') + 1);
+}
+
+// The real uid in /proc/<pid>/status, -1 if unreadable
+long real_uid_of(pid_t pid) {
+    const auto status = read_file_prefix("/proc/" + std::to_string(pid) + "/status", 4096);
+    if (!status) return -1;
+    const size_t at = status->find("\nUid:");
+    long uid = -1;
+    return at != std::string::npos && sscanf(status->c_str() + at + 5, "%ld", &uid) == 1 ? uid : -1;
 }
 
 // Every process below `root` right now
@@ -623,6 +645,23 @@ std::string Instance::diagnostics() const {
         if (!r.output.empty()) out += "\n--- logcat\n" + r.output;
     }
     return out;
+}
+
+int kill_orphans() {
+    static const char* const ours[] = {"libtawcroot.so", "libbinderd.so", "libvine_wl.so", "libvine_pulse.so",
+                                       "libvine_kumquat.so", "libvine_helper.so"};
+    int killed = 0;
+    for (pid_t p : all_pids()) {
+        if (p == getpid() || parent_of(p) != 1 || real_uid_of(p) != (long)getuid()) continue;
+        const std::string exe = exe_name(p);
+        for (const char* name : ours) {
+            if (exe == name && kill(p, SIGKILL) == 0) {
+                ++killed;
+                break;
+            }
+        }
+    }
+    return killed;
 }
 
 } // namespace vine::rootless

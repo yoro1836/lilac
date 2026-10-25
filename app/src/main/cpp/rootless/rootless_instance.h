@@ -90,4 +90,10 @@ private:
 
 const char* state_name(Instance::State s);
 
+// Kills what an engine that died without its keeper's cleanup (a SIGKILLed
+// keeper or helper) left running: processes of this uid that init adopted
+// and that run one of our binaries (every guest process runs tawcroot).
+// Returns how many.
+int kill_orphans();
+
 } // namespace vine::rootless

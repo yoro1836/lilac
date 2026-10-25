@@ -8,6 +8,7 @@ Usage: test_rootless.py VINE_HELPER"""
 import os
 import queue
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -294,9 +295,37 @@ def main():
     R = os.path.join(W, "rootfs")
     check(len(os.path.join(W, "run/pulse/native")) > 108, "the socket paths are longer than sun_path")
 
+    # A guest an earlier engine left behind: init adopted it and it runs
+    # tawcroot. A stray of ours with another binary is left alone.
+    def orphan(exe_name):
+        exe = os.path.join(top, exe_name)
+        shutil.copy("/bin/sleep", exe)
+        r, w = os.pipe()
+        if os.fork() == 0:
+            if os.fork() == 0:
+                os.close(r)
+                os.write(w, str(os.getpid()).encode())
+                os.execv(exe, [exe, "60"])
+            os._exit(0)
+        os.close(w)
+        pid = int(os.read(r, 32))
+        os.close(r)
+        os.wait()
+        return pid
+    leftover, stray = orphan("libtawcroot.so"), orphan("sleepy")
+    adopted = open("/proc/%d/stat" % leftover).read().rsplit(")", 1)[1].split()[1] == "1"
+
     sock = os.path.join(top, "debug.sock")
     h = Helper(base, lib, sock)
     print("[hello]")
+    if adopted:
+        time.sleep(0.3)
+        state = lambda pid: open("/proc/%d/stat" % pid).read().rsplit(")", 1)[1].split()[0] if os.path.exists("/proc/%d" % pid) else "gone"
+        check(state(leftover) in ("gone", "Z"), "a leftover guest is killed at start")
+        check(state(stray) not in ("gone", "Z"), "other processes are left alone")
+    else:
+        print("  (skipped orphan check: no init adopts orphans here)")
+    os.kill(stray, signal.SIGKILL)
     ok, text = h.call("hello")
     check(ok and "engine=rootless" in text and f"uid={os.getuid()}" in text, "hello: " + text)
     ok, text = h.call("start", name, os.path.join(top, "elsewhere"))

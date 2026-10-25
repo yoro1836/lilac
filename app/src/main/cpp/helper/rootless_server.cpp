@@ -1,6 +1,7 @@
 #include "rootless_server.h"
 #include "../diagnostics/host_probe.h"
 #include "../display/wayland/input_lines.h"
+#include "../utils/vine_log.h"
 #include "../utils/vine_utils.h"
 
 #include <algorithm>
@@ -66,7 +67,11 @@ const char* const kLaunchScript =
 } // namespace
 
 RootlessServer::RootlessServer(int in_fd, int out_fd, RootlessOptions options)
-    : LineServer(in_fd, out_fd), options_(std::move(options)) {}
+    : LineServer(in_fd, out_fd), options_(std::move(options)) {
+    // Guests of an engine whose keeper was killed outright still run,
+    // holding memory, until something kills them
+    if (const int n = rootless::kill_orphans()) VINE_LOGI("killed %d processes an earlier engine left behind", n);
+}
 
 RootlessServer::~RootlessServer() = default;
 
