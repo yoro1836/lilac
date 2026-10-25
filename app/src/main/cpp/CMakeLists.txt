@@ -99,6 +99,10 @@ target_link_options(vine_wl PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-size=
 add_executable(vine_lmkd rootless/vine_lmkd.c)
 target_link_options(vine_lmkd PRIVATE -static -Wl,-z,max-page-size=16384)
 
+# Copied into the guest: has MediaProvider scan what apps write to shared storage
+add_executable(vine_mediascan rootless/vine_mediascan.c)
+target_link_options(vine_mediascan PRIVATE -static -Wl,-z,max-page-size=16384)
+
 # Rootless guest audio: Waydroid's audio HAL connects to it, AAudio plays and records
 add_executable(vine_pulse
     audio/pulse/vine_pulse_main.cpp
@@ -126,7 +130,7 @@ target_compile_options(vine_vold_shim PRIVATE -fvisibility=hidden)
 target_link_libraries(vine_vold_shim PRIVATE dl)
 target_link_options(vine_vold_shim PRIVATE -Wl,-z,max-page-size=16384)
 
-foreach(tool vine_wl vine_lmkd vine_pulse vine_hal_service)
+foreach(tool vine_wl vine_lmkd vine_mediascan vine_pulse vine_hal_service)
     set_target_properties(${tool} PROPERTIES PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "${tool}")
     if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
         set_target_properties(${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")

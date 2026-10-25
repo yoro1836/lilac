@@ -138,9 +138,16 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
         "    mount none /data/media /mnt/pass_through/0/emulated bind rec\n"
         "    mount none /mnt/user/0 /storage bind rec\n"
         "\n"
+        // Without FUSE nothing tells MediaProvider what apps write
+        "service vine_mediascan /system/bin/vine_mediascan /data/media/0 /storage/emulated/0\n"
+        "    user root\n"
+        "    group media_rw\n"
+        "    disabled\n"
+        "\n"
         // The engine's boot signal, in its /run/user/1000
         "on property:sys.boot_completed=1\n"
-        "    write /run/user/1000/boot_completed 1\n";
+        "    write /run/user/1000/boot_completed 1\n"
+        "    start vine_mediascan\n";
     if (own_audio_hal) {
         // The image's audio HAL service is 32-bit only; its 64-bit
         // implementations are served by our passthrough service
@@ -477,7 +484,9 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (!is_regular_file(R + "/vendor/bin/hw/android.hardware.media.omx@1.0-service") &&
         !drop_vendor_hals(R, {"android.hardware.media.omx"}, error))
         return false;
-    if (!copy_mode(o.lib_dir + "/libvine_lmkd.so", R + "/system/bin/vine_lmkd", 0755, error)) return false;
+    if (!copy_mode(o.lib_dir + "/libvine_lmkd.so", R + "/system/bin/vine_lmkd", 0755, error) ||
+        !copy_mode(o.lib_dir + "/libvine_mediascan.so", R + "/system/bin/vine_mediascan", 0755, error))
+        return false;
     // vold mounts emulated storage only through FUSE: the shim fakes that
     // part over the binds vine-rootless.rc makes
     const std::string vold_rc = R + "/system/etc/init/vold.rc";
