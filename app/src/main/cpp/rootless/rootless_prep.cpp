@@ -420,6 +420,16 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         if (!drop_32bit_services(R, own_audio_hal ? "android.hardware.audio.service" : "", error)) return false;
     }
     if (!copy_mode(o.lib_dir + "/libvine_lmkd.so", R + "/system/bin/vine_lmkd", 0755, error)) return false;
+    // The padded gralloc takes gralloc.default's place (the hwcomposer and
+    // Mesa tell gralloc kinds apart by ro.hardware.gralloc) and loads it
+    // under another name
+    const std::string hw = R + "/vendor/lib64/hw";
+    if (is_regular_file(hw + "/gralloc.default.so") && !is_regular_file(hw + "/gralloc.default_real.so") &&
+        rename((hw + "/gralloc.default.so").c_str(), (hw + "/gralloc.default_real.so").c_str()) != 0)
+        return fail_errno(error, "rename gralloc.default.so");
+    if (is_regular_file(hw + "/gralloc.default_real.so") &&
+        !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.default.so", 0644, error))
+        return false;
     // $R/product is an absolute symlink, its files are in system/product
     const std::string product_init = R + "/system/product/etc/init";
     if (!mkdirs_or_fail(product_init, error) || !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal), 0644, error)) return false;

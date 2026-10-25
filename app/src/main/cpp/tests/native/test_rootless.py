@@ -170,6 +170,8 @@ def build_images(top, inst, audio_hal_class=1):
         "<manifest>\n" + hal("android.hardware.media.omx") + hal("android.hardware.light") + "</manifest>\n")
     open(os.path.join(vend, "etc/vintf/manifest/omx.xml"), "w").write("<manifest>\n" + hal("android.hardware.media.omx") + "</manifest>\n")
     open(os.path.join(vend, "build.prop"), "w").write("ro.vendor.product.cpu.abilist=arm64-v8a,armeabi-v7a\nro.vendor.x=1\n")
+    os.makedirs(os.path.join(vend, "lib64/hw"))
+    open(os.path.join(vend, "lib64/hw/gralloc.default.so"), "w").write("default gralloc\n")
     make_image(sysd, os.path.join(inst, "system.img"), 16)
     make_image(vend, os.path.join(inst, "vendor.img"), 8)
 
@@ -181,6 +183,7 @@ def build_libs(lib):
     write_exec(os.path.join(lib, "libvine_pulse.so"), FAKE_PULSE)
     write_exec(os.path.join(lib, "libvine_wl.so"), FAKE_WL)
     write_exec(os.path.join(lib, "libvine_lmkd.so"), "#!/bin/sh\n# lmkd\n")
+    write_exec(os.path.join(lib, "libvine_gralloc.so"), "gralloc\n")
     write_exec(os.path.join(lib, "libvine_hal_service.so"), "#!/bin/sh\n# hal\n")
     write_exec(os.path.join(lib, "fakebin/cmd"), FAKE_CMD)
     write_exec(os.path.join(lib, "fakebin/input"), FAKE_INPUT)
@@ -319,6 +322,8 @@ def main():
     check(os.path.exists(rc_path) and stat.S_IMODE(os.stat(rc_path).st_mode) == 0o644, "rc mode 644")
     check(os.access(os.path.join(R, "vendor/bin/hw/vine_hal_service"), os.X_OK), "hal service installed")
     check(os.access(os.path.join(R, "system/bin/vine_lmkd"), os.X_OK), "lmkd installed")
+    check(read(os.path.join(R, "vendor/lib64/hw/gralloc.default.so")) == "gralloc\n" and
+          read(os.path.join(R, "vendor/lib64/hw/gralloc.default_real.so")) == "default gralloc\n", "gralloc shim installed")
     check("ro.sf.lcd_density=240" in read(os.path.join(R, "vendor/waydroid.prop")), "waydroid.prop density")
     check("<op n=\"24\"" in read(os.path.join(W, "data/system/appops.xml")), "appops seeded")
     for d in ("data/misc/ethernet", "data/misc/apexdata/com.android.tethering/misc/ethernet"):

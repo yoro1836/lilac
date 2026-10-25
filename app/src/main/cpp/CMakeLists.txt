@@ -113,6 +113,12 @@ add_executable(vine_hal_service rootless/hal_service.cpp)
 target_link_libraries(vine_hal_service PRIVATE dl)
 target_link_options(vine_hal_service PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-size=16384)
 
+# Copied into the guest as gralloc.vine: gralloc.default with padded buffer heights
+add_library(vine_gralloc SHARED rootless/gralloc_shim.c)
+target_compile_options(vine_gralloc PRIVATE -fvisibility=hidden)
+target_link_libraries(vine_gralloc PRIVATE dl)
+target_link_options(vine_gralloc PRIVATE -Wl,-z,max-page-size=16384)
+
 foreach(tool vine_wl vine_lmkd vine_pulse vine_hal_service)
     set_target_properties(${tool} PROPERTIES PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "${tool}")
     if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
