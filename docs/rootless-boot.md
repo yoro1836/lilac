@@ -67,6 +67,17 @@ boot, the dev loop in `boot-init.sh`:
   libbinder `access()`es the driver path before opening it.
 - Bind host `/dev/ptmx` and `/dev/pts`: init's logwrapper needs a pty
   (linkerconfig, vdc), without which no linker namespaces get generated.
+- Shared storage: Android 13 mounts `/storage/emulated` only through
+  FUSE. `vine-rootless.rc` binds `/data/media` on `/mnt/user/0/emulated`
+  and `/mnt/pass_through/0/emulated`, and `/mnt/user/0` on `/storage`, at
+  post-fs-data (before zygote). `libvine_vold_shim`, preloaded into vold
+  (`setenv LD_PRELOAD` added to vold.rc), hands out a socket holding a
+  FUSE_INIT for `/dev/fuse` (MediaProvider's daemon starts on it and then
+  idles) and turns vold's fuse mount and lower-directory binds into
+  no-ops, so the volume reaches MOUNTED. tawcroot carries submounts along
+  on `MS_BIND|MS_REC` (zygote's `/storage` bind) and maps an fd's path
+  back through the newest bind of its directory, so real paths stay
+  under `/storage/emulated`.
 - lmkd: `/product/etc/init/vine-rootless.rc` replaces it with
   `vine_lmkd` (`app/src/main/cpp/rootless/vine_lmkd.c`). The real one
   needs PSI or memcg, both closed to apps; without any lmkd every oom-adj
