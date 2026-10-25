@@ -1,0 +1,165 @@
+From: tawc
+Origin: own
+
+Replace the AOSP-only `nativewindow` Rust crate in
+src/gfxstream.rs's PLATFORM_AHB export branch with an embedder hook.
+The crate wraps libnativewindow.so APIs and is only published inside
+AOSP, so rutabaga does not build outside AOSP with the gfxstream
+feature enabled.
+
+The hook is what lets the tawc compositor satisfy kumquat's
+RESOURCE_CREATE_BLOB protocol contract (the response is *required*
+to ship one fd via SCM_RIGHTS for every PLATFORM_AHB). The
+compositor's registered callback dlsym's
+`AHardwareBuffer_getNativeHandle` out of `libnativewindow.so`,
+walks the handle, dups out the AHB's backing dmabuf fd, and
+returns it. The wrapper here boxes that into a MesaHandle of type
+MEM_DMABUF so the kumquat layer can ship it via SCM_RIGHTS unchanged.
+
+For host-visible Vulkan memory the chroot mmaps the fd to access the
+host allocation. Swapchain images are displayed through the separate
+`tawc_gfxstream` ColorBuffer-id path; this hook only satisfies the
+kumquat blob response's fd contract.
+
+With no callback set, the branch falls back to InvalidResourceId --
+that's the right answer for the bin'd `kumquat` binary, which has
+no AHB consumer wired up.
+
+diff --git a/src/gfxstream.rs b/src/gfxstream.rs
+index 65612a1..36f93bc 100644
+--- a/src/gfxstream.rs
++++ b/src/gfxstream.rs
+@@ -22,6 +22,7 @@ use std::process::abort;
+ use std::ptr::null;
+ use std::ptr::null_mut;
+ use std::sync::Arc;
++use std::sync::OnceLock;
+ 
+ use mesa3d_util::FromRawDescriptor;
+ use mesa3d_util::IntoRawDescriptor;
+@@ -30,6 +31,7 @@ use mesa3d_util::MesaHandle;
+ use mesa3d_util::MesaMapping;
+ use mesa3d_util::OwnedDescriptor;
+ use mesa3d_util::RawDescriptor;
++use mesa3d_util::MESA_HANDLE_TYPE_MEM_DMABUF;
+ use serde::Deserialize;
+ use serde::Serialize;
+ 
+@@ -68,6 +70,34 @@ use crate::snapshot::RutabagaSnapshotReader;
+ #[cfg(gfxstream_unstable)]
+ use crate::snapshot::RutabagaSnapshotWriter;
+ 
++/// Embedder hook for the PLATFORM_AHB branch of `Gfxstream::export_blob`.
++///
++/// Input is `stream_renderer_handle.os_handle` for a PLATFORM_AHB result,
++/// i.e. an `AHardwareBuffer*` cast to `i64` (the gfxstream renderer's own
++/// in-process pointer; the AHB's refcount is still owned by the gfxstream
++/// side at call time — embedders that want it to outlive the gfxstream
++/// resource must take their own ref via `AHardwareBuffer_acquire`).
++///
++/// Return is a raw fd that the rutabaga server will ship to the kumquat
++/// client via SCM_RIGHTS. The wrapper turns it into a `MesaHandle` of
++/// type `MEM_DMABUF`. The expected callback shape mirrors AOSP's
++/// `nativewindow` path: pull the AHB's backing dmabuf fd out of its
++/// `native_handle_t` and return a dup owned by rutabaga.
++///
++/// `Err(())` becomes `RutabagaError::InvalidResourceId` to the caller —
++/// matches the upstream "we have an AHB we can't ship over IPC" failure
++/// mode rutabaga returns on systems with no nativewindow shim.
++pub type AhbExportFn = fn(ahb_os_handle: i64) -> Result<i32, ()>;
++
++static AHB_EXPORT_CB: OnceLock<AhbExportFn> = OnceLock::new();
++
++/// Install the AHB export hook. First call wins; subsequent calls
++/// are silently rejected (matches `OnceLock::set`). Returns `Ok(())` on
++/// successful install, `Err(())` if a callback was already set.
++pub fn set_ahb_export_callback(cb: AhbExportFn) -> Result<(), ()> {
++    AHB_EXPORT_CB.set(cb).map_err(|_| ())
++}
++
+ // See `virtgpu-gfxstream-renderer.h` for definitions
+ const STREAM_RENDERER_PARAM_USER_DATA: u64 = 1;
+ const STREAM_RENDERER_PARAM_RENDERER_FLAGS: u64 = 2;
+@@ -530,45 +560,24 @@ impl Gfxstream {
+         ret_to_res(ret)?;
+ 
+         if stream_handle.handle_type == RUTABAGA_HANDLE_TYPE_PLATFORM_AHB {
+-            #[cfg(target_os = "android")]
+-            {
+-                use crate::handle::AhbInfo;
+-                use nativewindow::AhbInfo as NativeAhbInfo;
+-                use nativewindow::HardwareBuffer;
+-                use std::os::fd::IntoRawFd;
+-                use std::ptr::NonNull;
+-
+-                let buffer_ptr = NonNull::new(stream_handle.os_handle as *mut c_void)
+-                    .ok_or(RutabagaError::InvalidResourceId)?;
+-
+-                // SAFETY:
+-                // Safe because `buffer_ptr` is a valid AHardwareBuffer pointer.
+-                let buffer = unsafe { HardwareBuffer::clone_from_raw(buffer_ptr.cast()) };
+-
+-                let ahb_info: NativeAhbInfo = buffer
+-                    .try_into()
+-                    .map_err(|_| RutabagaError::InvalidResourceId)?;
+-
+-                // Convert nativewindow::AhbInfo to RutabagaHandle::AhbInfo
+-                let fds = ahb_info
+-                    .fds
+-                    .into_iter()
+-                    .map(|fd| {
+-                        // SAFETY:
+-                        // Safe because the file descriptor is valid and owned.
+-                        unsafe { OwnedDescriptor::from_raw_descriptor(fd.into_raw_fd()) }
+-                    })
+-                    .collect();
+-
+-                Ok(Arc::new(RutabagaHandle::from(AhbInfo {
+-                    fds,
+-                    metadata: ahb_info.data,
+-                })))
+-            }
+-            #[cfg(not(target_os = "android"))]
+-            {
+-                Err(RutabagaError::InvalidResourceId)
+-            }
++            // tawc-fork: route AHB export through an embedder hook
++            // instead of AOSP's private `nativewindow` crate.
++            let cb = AHB_EXPORT_CB
++                .get()
++                .ok_or(RutabagaError::InvalidResourceId)?;
++            let raw_fd = cb(stream_handle.os_handle)
++                .map_err(|_| RutabagaError::InvalidResourceId)?;
++            // SAFETY: the callback contract is that the returned fd is a
++            // valid open fd whose ownership transfers to us.
++            let handle =
++                unsafe { OwnedDescriptor::from_raw_descriptor(raw_fd as RawDescriptor) };
++            Ok(Arc::new(
++                MesaHandle {
++                    os_handle: handle,
++                    handle_type: MESA_HANDLE_TYPE_MEM_DMABUF,
++                }
++                .into(),
++            ))
+         } else {
+             let raw_descriptor = stream_handle.os_handle as RawDescriptor;
+             // SAFETY:
+diff --git a/src/lib.rs b/src/lib.rs
+index 991b766..06267c5 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -32,6 +32,14 @@ pub use mesa3d_util::RawDescriptor as RutabagaRawDescriptor;
+ pub use mesa3d_util::MESA_HANDLE_TYPE_MEM_DMABUF as RUTABAGA_HANDLE_TYPE_MEM_DMABUF;
+ pub use mesa3d_util::MESA_HANDLE_TYPE_MEM_OPAQUE_FD as RUTABAGA_HANDLE_TYPE_MEM_OPAQUE_FD;
+ 
++// tawc-fork: expose the AHB export hook to embedders. See
++// `gfxstream::set_ahb_export_callback` for the API and
++// `notes/gfxstream-bridge.md` "WSI plan" section for the design.
++#[cfg(feature = "gfxstream")]
++pub use crate::gfxstream::set_ahb_export_callback;
++#[cfg(feature = "gfxstream")]
++pub use crate::gfxstream::AhbExportFn;
++
+ pub use crate::handle::AhbInfo;
+ pub use crate::handle::RutabagaHandle;
+ pub use crate::rutabaga_core::calculate_capset_mask;

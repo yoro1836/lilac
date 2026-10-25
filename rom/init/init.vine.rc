@@ -1,4 +1,4 @@
-# VineOS guest additions, init loads this from the ramdisk root when ro.hardware is vine
+# Wayondroid guest additions, init loads this from the ramdisk root when ro.hardware is vine
 
 service vine-boot-marker /system/bin/sh -c "echo 1 > /vine/boot_completed"
     class late_start

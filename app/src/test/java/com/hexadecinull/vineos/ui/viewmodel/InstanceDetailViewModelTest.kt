@@ -1,8 +1,10 @@
 package com.hexadecinull.vineos.ui.viewmodel
 
 import com.google.common.truth.Truth.assertThat
+import com.hexadecinull.vineos.data.models.GuestResolution
 import com.hexadecinull.vineos.data.models.VMInstance
 import com.hexadecinull.vineos.data.models.VMStatus
+import com.hexadecinull.vineos.data.repository.AppPreferences
 import com.hexadecinull.vineos.data.repository.InstanceRepository
 import com.hexadecinull.vineos.domain.VineVMManager
 import io.mockk.coEvery
@@ -35,7 +37,9 @@ class InstanceDetailViewModelTest {
         instanceRepo = mockk(relaxed = true)
         vmManager = mockk(relaxed = true)
         every { instanceRepo.observeAll() } returns flowOf(listOf(buildInstance("id-1")))
-        viewModel = InstanceDetailViewModel(instanceRepo, vmManager)
+        val prefs: AppPreferences = mockk(relaxed = true)
+        every { prefs.guestResolution } returns flowOf(GuestResolution.BALANCED)
+        viewModel = InstanceDetailViewModel(instanceRepo, vmManager, prefs)
     }
 
     @After
@@ -105,6 +109,17 @@ class InstanceDetailViewModelTest {
         viewModel.refreshDiagnostics()
         val state = viewModel.uiState.first { it.diagnostics.isNotBlank() }
         assertThat(state.diagnostics).isEqualTo("mount table: ok")
+    }
+
+    @Test
+    fun `display settings are saved on the instance`() = runTest(testDispatcher) {
+        val instance = buildInstance("id-1")
+        coEvery { instanceRepo.getById("id-1") } returns instance
+        viewModel.load("id-1")
+        viewModel.setRefreshHz(120)
+        coVerify { instanceRepo.update(instance.copy(refreshHz = 120)) }
+        viewModel.setResolution(GuestResolution.LOW)
+        coVerify { instanceRepo.update(instance.copy(resolution = "LOW")) }
     }
 
     private fun buildInstance(id: String, status: VMStatus = VMStatus.STOPPED) = VMInstance(

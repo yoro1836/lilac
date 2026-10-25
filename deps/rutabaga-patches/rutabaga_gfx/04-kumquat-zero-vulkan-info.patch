@@ -1,0 +1,95 @@
+From: tawc
+Origin: own
+
+Zero the vulkan_info.device_id in the kumquat server's
+RESOURCE_CREATE_BLOB response so the chroot-side
+VirtGpuKumquatResource::createMapping takes its plain-mmap branch
+(virtgpu_kumquat_resource_map) instead of the GfxStreamVulkanMapper
+path.
+
+The mapper path is what canonical gfxstream deployments use: the
+chroot's Mesa-radv (or other "real" Vulkan ICD that matches the
+host GPU UUID) imports the exported dmabuf via VkImportMemoryFdInfoKHR
+into a VkDeviceMemory and maps it. Our chroot only has
+libvulkan_gfxstream.so as the ICD, so the mapper recursively picks
+gfxstream-vk for the import. gfxstream-vk's importDmabuf path calls
+kumquat's resource_import, which expects an "emulated" handle
+(a SHM whose first 4 bytes encode a resource_id). Our hook now
+ships a real dmabuf fd whose first 4 bytes are typically zero, so
+resource_import reads back resource_handle=0 and the subsequent
+vkAllocateMemory(VkImportColorBufferGOOGLE{colorBuffer=0}) trips
+the host's `vk_decoder_global_state.cpp(5853) Failed to get
+allocation info for ColorBuffer:0` abort.
+
+With device_uuid all-zero in the response, createMapping skips the
+mapper and just mmaps the dmabuf fd directly — which is exactly
+what we want, since our hook gives the chroot a real, mmap-able fd
+that aliases the AHB's underlying pages. See notes/gfxstream-bridge.md
+"WSI plan" for the surrounding design.
+
+diff --git a/kumquat/server/src/kumquat_gpu/mod.rs b/kumquat/server/src/kumquat_gpu/mod.rs
+index ca29c2f..bdda214 100644
+--- a/kumquat/server/src/kumquat_gpu/mod.rs
++++ b/kumquat/server/src/kumquat_gpu/mod.rs
+@@ -34,7 +34,6 @@ use rutabaga_gfx::RutabagaFenceHandler;
+ use rutabaga_gfx::RutabagaIovec;
+ use rutabaga_gfx::RutabagaWsi;
+ use rutabaga_gfx::Transfer3D;
+-use rutabaga_gfx::VulkanInfo as RutabagaVulkanInfo;
+ use rutabaga_gfx::RUTABAGA_FLAG_FENCE;
+ use rutabaga_gfx::RUTABAGA_FLAG_FENCE_HOST_SHAREABLE;
+ use rutabaga_gfx::RUTABAGA_MAP_ACCESS_RW;
+@@ -436,10 +435,6 @@ impl KumquatGpuConnection {
+ 
+                     let handle = kumquat_gpu.rutabaga.export_blob(resource_id)?;
+                     let handle = MesaHandle::try_from(handle)?;
+-                    let mut vk_info: RutabagaVulkanInfo = Default::default();
+-                    if let Ok(vulkan_info) = kumquat_gpu.rutabaga.vulkan_info(resource_id) {
+-                        vk_info = vulkan_info;
+-                    }
+ 
+                     kumquat_gpu.resources.insert(
+                         resource_id,
+@@ -449,6 +444,28 @@ impl KumquatGpuConnection {
+                         },
+                     );
+ 
++                    // tawc-fork: zero `vulkan_info.device_id` in the
++                    // response so the chroot-side
++                    // `VirtGpuKumquatResource::createMapping` takes its
++                    // plain-mmap branch (`virtgpu_kumquat_resource_map`)
++                    // instead of `GfxStreamVulkanMapper::map`. The
++                    // mapper path imports the fd via
++                    // `VkImportMemoryFdInfoKHR` on a chroot-side Vulkan
++                    // driver other than gfxstream-vk; the canonical
++                    // gfxstream deployment ships such a driver (e.g.
++                    // Mesa radv in an AVF VM guest), but our chroot
++                    // only has gfxstream-vk so the mapper recursively
++                    // uses gfxstream-vk for the import. That import
++                    // goes through kumquat's `resource_import` which
++                    // expects a SHM-encoded emulated handle (the fd's
++                    // first 4 bytes are read as a resource_id); a real
++                    // dmabuf has 0 there, so the returned ColorBuffer
++                    // id is 0, which the host can't find and aborts
++                    // with `vk_decoder_global_state.cpp(5853) Failed to
++                    // get allocation info for ColorBuffer:0`. The
++                    // plain-mmap path mmaps the dmabuf directly and
++                    // works fine. See
++                    // notes/gfxstream-bridge.md for the full story.
+                     let resp = kumquat_gpu_protocol_resp_resource_create {
+                         hdr: kumquat_gpu_protocol_ctrl_hdr {
+                             type_: KUMQUAT_GPU_PROTOCOL_RESP_RESOURCE_CREATE,
+@@ -457,10 +474,10 @@ impl KumquatGpuConnection {
+                         resource_id,
+                         handle_type: handle.handle_type,
+                         vulkan_info: VulkanInfo {
+-                            memory_idx: vk_info.memory_idx,
++                            memory_idx: 0,
+                             device_id: DeviceId {
+-                                device_uuid: vk_info.device_id.device_uuid,
+-                                driver_uuid: vk_info.device_id.driver_uuid,
++                                device_uuid: [0; 16],
++                                driver_uuid: [0; 16],
+                             },
+                         },
+                     };

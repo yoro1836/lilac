@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Packs ramdisk.img, vendor.img (optional) and system.img into a .vrom for VineOS."""
+"""Packs ramdisk.img, vendor.img (optional) and system.img into a .vrom for Wayondroid.
+
+--kind waydroid packs a system-as-root image (no ramdisk, e.g. Waydroid's
+system.img and vendor.img), which the app boots on the rootless engine."""
 
 import argparse
 import hashlib
@@ -22,10 +25,11 @@ def sha256_of(path: Path) -> str:
 def build(args: argparse.Namespace) -> Path:
     src = Path(args.images)
     present = {name: src / name for name in PAYLOAD if (src / name).is_file()}
-    for required in ("ramdisk.img", "system.img"):
+    for required in ("system.img",) if args.kind == "waydroid" else ("ramdisk.img", "system.img"):
         if required not in present:
             raise SystemExit(f"{src / required} is missing")
     manifest = {
+        "kind": args.kind,
         "displayName": args.name,
         "androidVersion": args.android_version,
         "apiLevel": args.api_level,
@@ -50,6 +54,7 @@ def main() -> None:
     p.add_argument("--api-level", required=True, type=int)
     p.add_argument("--abis", nargs="+", default=["arm64-v8a"])
     p.add_argument("--description", default="")
+    p.add_argument("--kind", choices=("vine", "waydroid"), default="vine")
     out = build(p.parse_args())
     print(f"Wrote {out} ({out.stat().st_size} bytes)", file=sys.stderr)
 

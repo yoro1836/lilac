@@ -1,0 +1,324 @@
+From: wayondroid
+Origin: own
+
+A gralloc service on a second kumquat socket for an Android guest:
+ALLOC makes a context-less 3D resource (a gfxstream ColorBuffer) with a
+shared CPU backing and hands out a lifetime socket; the resource is
+freed when every guest copy of it is closed. TRANSFER copies between
+the backing and the ColorBuffer for CPU locks.
+
+--- a/kumquat/server/src/kumquat.rs
++++ b/kumquat/server/src/kumquat.rs
+@@ -6,11 +6,19 @@
+ use std::collections::BTreeMap as Map;
+ use std::path::PathBuf;
+ 
++use std::os::fd::IntoRawFd;
++use std::os::unix::net::UnixStream;
++
+ use mesa3d_util::AsBorrowedDescriptor;
++use mesa3d_util::FromRawDescriptor;
+ use mesa3d_util::Listener;
+ use mesa3d_util::MesaError;
++use mesa3d_util::OwnedDescriptor;
++use mesa3d_util::Tube;
+ use mesa3d_util::WaitContext;
+ use mesa3d_util::WaitTimeout;
++use rutabaga_gfx::ResourceCreate3D;
++use rutabaga_gfx::Transfer3D;
+ 
+ use crate::kumquat_gpu::KumquatGpu;
+ use crate::kumquat_gpu::KumquatGpuConnection;
+@@ -19,6 +27,23 @@
+ enum KumquatConnection {
+     GpuListener,
+     GpuConnection(Box<KumquatGpuConnection>),
++    // wayondroid: the guest gralloc's socket, its clients, and each
++    // buffer's end of its lifetime socket (see gralloc_request)
++    GrallocListener,
++    GrallocConnection(Tube),
++    GrallocLifetime(u32, OwnedDescriptor),
++}
++
++const GRALLOC_ALLOC: u32 = 1;
++const GRALLOC_TRANSFER: u32 = 2;
++
++fn word(b: &[u8], i: usize) -> u32 {
++    u32::from_le_bytes([b[4 * i], b[4 * i + 1], b[4 * i + 2], b[4 * i + 3]])
++}
++
++fn owned(fd: UnixStream) -> OwnedDescriptor {
++    // SAFETY: the fd was just taken out of its owner
++    unsafe { OwnedDescriptor::from_raw_descriptor(fd.into_raw_fd()) }
+ }
+ 
+ pub struct Kumquat {
+@@ -28,10 +53,98 @@
+     capset_names: String,
+     renderer_features: String,
+     gpu_listener_opt: Option<Listener>,
++    gralloc_listener_opt: Option<Listener>,
+     connections: Map<u64, KumquatConnection>,
+ }
+ 
+ impl Kumquat {
++    fn ensure_gpu(&mut self) -> KumquatGpuResult<()> {
++        if self.kumquat_gpu_opt.is_none() {
++            self.kumquat_gpu_opt = Some(KumquatGpu::new(
++                self.capset_names.clone(),
++                self.renderer_features.clone(),
++            )?);
++        }
++        Ok(())
++    }
++
++    /// One gralloc request, 12 little-endian words: an op and its args.
++    /// ALLOC (target, format, bind, width, height, size) answers
++    /// (status, resource id) with the CPU backing and a lifetime socket;
++    /// TRANSFER (resource id, to host, x, y, w, h, stride) answers
++    /// (status, 0) once the copy is done. Returns false on hang up.
++    fn gralloc_request(&mut self, tube: &Tube) -> KumquatGpuResult<bool> {
++        let mut buf = [0u8; 48];
++        let (n, _) = tube.receive(&mut buf)?;
++        if n == 0 {
++            return Ok(false);
++        }
++        if n < 48 {
++            return Err(MesaError::WithContext("short gralloc request").into());
++        }
++        self.ensure_gpu()?;
++        let gpu = self.kumquat_gpu_opt.as_mut().unwrap();
++        let mut reply = [0u8; 8];
++        let mut status: i32 = 0;
++        match word(&buf, 0) {
++            GRALLOC_ALLOC => {
++                let create = ResourceCreate3D {
++                    target: word(&buf, 1),
++                    format: word(&buf, 2),
++                    bind: word(&buf, 3),
++                    width: word(&buf, 4),
++                    height: word(&buf, 5),
++                    depth: 1,
++                    array_size: 1,
++                    last_level: 0,
++                    nr_samples: 0,
++                    flags: 0,
++                };
++                match gpu.gralloc_alloc(create, word(&buf, 6) as usize) {
++                    Ok((resource_id, shm)) => {
++                        let (ours, theirs) = UnixStream::pair().map_err(MesaError::IoError)?;
++                        let ours = owned(ours);
++                        self.connection_id += 1;
++                        self.wait_ctx.add(self.connection_id, &ours)?;
++                        self.connections.insert(
++                            self.connection_id,
++                            KumquatConnection::GrallocLifetime(resource_id, ours),
++                        );
++                        reply[4..].copy_from_slice(&resource_id.to_le_bytes());
++                        tube.send(&reply, &[shm, owned(theirs)])?;
++                        return Ok(true);
++                    }
++                    Err(e) => {
++                        eprintln!("kumquat: gralloc alloc failed: {:?}", e);
++                        status = -12;
++                    }
++                }
++            }
++            GRALLOC_TRANSFER => {
++                let transfer = Transfer3D {
++                    x: word(&buf, 3),
++                    y: word(&buf, 4),
++                    z: 0,
++                    w: word(&buf, 5),
++                    h: word(&buf, 6),
++                    d: 1,
++                    level: 0,
++                    stride: word(&buf, 7),
++                    layer_stride: 0,
++                    offset: 0,
++                };
++                if let Err(e) = gpu.gralloc_transfer(word(&buf, 1), word(&buf, 2) != 0, transfer) {
++                    eprintln!("kumquat: gralloc transfer failed: {:?}", e);
++                    status = -5;
++                }
++            }
++            _ => status = -22,
++        }
++        reply[..4].copy_from_slice(&status.to_le_bytes());
++        tube.send(&reply, &[])?;
++        Ok(true)
++    }
++
+     pub fn run(&mut self) -> KumquatGpuResult<()> {
+         let events = self.wait_ctx.wait(WaitTimeout::NoTimeout)?;
+         for event in events {
+@@ -65,6 +178,50 @@
+                                 );
+                             }
+                         }
++                        KumquatConnection::GrallocListener => {
++                            if let Some(ref listener) = self.gralloc_listener_opt {
++                                let tube = listener.accept()?;
++                                self.connection_id += 1;
++                                self.wait_ctx.add(self.connection_id, tube.as_borrowed_descriptor())?;
++                                self.connections.insert(
++                                    self.connection_id,
++                                    KumquatConnection::GrallocConnection(tube),
++                                );
++                            }
++                        }
++                        KumquatConnection::GrallocConnection(_) => {
++                            let (_, conn) = o.remove_entry();
++                            let tube = match conn {
++                                KumquatConnection::GrallocConnection(t) => t,
++                                _ => unreachable!(),
++                            };
++                            let keep = event.readable
++                                && match self.gralloc_request(&tube) {
++                                    Ok(k) => k,
++                                    Err(e) => {
++                                        eprintln!("kumquat: gralloc client dropped: {:?}", e);
++                                        false
++                                    }
++                                };
++                            if keep {
++                                self.connections.insert(
++                                    event.connection_id,
++                                    KumquatConnection::GrallocConnection(tube),
++                                );
++                            } else {
++                                self.wait_ctx.delete(tube.as_borrowed_descriptor())?;
++                            }
++                            continue;
++                        }
++                        KumquatConnection::GrallocLifetime(resource_id, ref descriptor) => {
++                            // Every guest copy of the other end is closed
++                            let resource_id = *resource_id;
++                            self.wait_ctx.delete(descriptor)?;
++                            o.remove_entry();
++                            if let Some(ref mut gpu) = self.kumquat_gpu_opt {
++                                gpu.gralloc_free(resource_id);
++                            }
++                        }
+                         KumquatConnection::GpuConnection(ref mut gpu_conn) => {
+                             if event.readable {
+                                 if let Some(ref mut kumquat_gpu) = self.kumquat_gpu_opt {
+@@ -127,6 +284,7 @@
+ pub struct KumquatBuilder {
+     capset_names_opt: Option<String>,
+     gpu_socket_opt: Option<String>,
++    gralloc_socket_opt: Option<String>,
+     renderer_features_opt: Option<String>,
+ }
+ 
+@@ -135,6 +293,7 @@
+         KumquatBuilder {
+             capset_names_opt: None,
+             gpu_socket_opt: None,
++            gralloc_socket_opt: None,
+             renderer_features_opt: None,
+         }
+     }
+@@ -149,6 +308,11 @@
+         self
+     }
+ 
++    pub fn set_gralloc_socket(mut self, gralloc_socket_opt: Option<String>) -> KumquatBuilder {
++        self.gralloc_socket_opt = gralloc_socket_opt;
++        self
++    }
++
+     pub fn set_renderer_features(mut self, renderer_features: String) -> KumquatBuilder {
+         self.renderer_features_opt = Some(renderer_features);
+         self
+@@ -174,6 +338,18 @@
+             gpu_listener_opt = Some(gpu_listener);
+         }
+ 
++        let mut connection_id = connection_id;
++        let mut gralloc_listener_opt: Option<Listener> = None;
++        if let Some(gralloc_socket) = self.gralloc_socket_opt {
++            let path = PathBuf::from(&gralloc_socket);
++            let _ = std::fs::remove_file(&path);
++            let listener = Listener::bind(path)?;
++            connection_id += 1;
++            wait_ctx.add(connection_id, listener.as_borrowed_descriptor())?;
++            connections.insert(connection_id, KumquatConnection::GrallocListener);
++            gralloc_listener_opt = Some(listener);
++        }
++
+         Ok(Kumquat {
+             connection_id,
+             wait_ctx,
+@@ -181,6 +357,7 @@
+             capset_names,
+             renderer_features,
+             gpu_listener_opt,
++            gralloc_listener_opt,
+             connections,
+         })
+     }
+--- a/kumquat/server/src/kumquat_gpu/mod.rs
++++ b/kumquat/server/src/kumquat_gpu/mod.rs
+@@ -530,3 +530,61 @@
+         self.stream.as_borrowed_descriptor()
+     }
+ }
++
++// wayondroid: buffers for the guest's gralloc. A gralloc buffer is a 3D
++// resource (a gfxstream ColorBuffer, its handle the resource id) with a
++// guest-shared backing for CPU access, attached to no context: it lives
++// until every guest copy of its lifetime socket is closed.
++impl KumquatGpu {
++    pub fn gralloc_alloc(
++        &mut self,
++        create: ResourceCreate3D,
++        size: usize,
++    ) -> KumquatGpuResult<(u32, OwnedDescriptor)> {
++        let descriptor: OwnedDescriptor = SharedMemory::new("gralloc", size as u64)?.into();
++        let clone = descriptor.try_clone().map_err(MesaError::IoError)?;
++        let mapping = MemoryMapping::from_safe_descriptor(
++            clone,
++            size,
++            RUTABAGA_MAP_CACHE_CACHED | RUTABAGA_MAP_ACCESS_RW,
++        )?;
++        let vecs = vec![RutabagaIovec {
++            base: mapping.as_mesa_mapping().ptr as *mut c_void,
++            len: size,
++        }];
++        let resource_id = self.allocate_id();
++        self.rutabaga.resource_create_3d(resource_id, create)?;
++        self.rutabaga.attach_backing(resource_id, vecs)?;
++        self.resources.insert(
++            resource_id,
++            KumquatGpuResource {
++                attached_contexts: Default::default(),
++                mapping: Some(mapping),
++            },
++        );
++        Ok((resource_id, descriptor))
++    }
++
++    pub fn gralloc_free(&mut self, resource_id: u32) {
++        if let Some(resource) = self.resources.remove(&resource_id) {
++            if resource.mapping.is_some() {
++                let _ = self.rutabaga.detach_backing(resource_id);
++            }
++            let _ = self.rutabaga.unref_resource(resource_id);
++        }
++    }
++
++    pub fn gralloc_transfer(
++        &mut self,
++        resource_id: u32,
++        to_host: bool,
++        transfer: Transfer3D,
++    ) -> KumquatGpuResult<()> {
++        if to_host {
++            self.rutabaga.transfer_write(0, resource_id, transfer, None)?;
++        } else {
++            self.rutabaga.transfer_read(0, resource_id, transfer, None)?;
++        }
++        Ok(())
++    }
++}

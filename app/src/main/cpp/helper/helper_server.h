@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agent_link.h"
+#include "line_server.h"
 #include "../container/namespace_manager.h"
 
 #include <memory>
@@ -18,14 +19,11 @@ struct HelperOptions {
     int owner_gid = -1;
 };
 
-// Root side of VineOS, spoken over stdin and stdout as tab separated lines (see HelperProtocol.kt)
-class HelperServer {
+// Root side of Wayondroid, spoken over stdin and stdout as tab separated lines (see HelperProtocol.kt)
+class HelperServer : public LineServer {
 public:
     HelperServer(int in_fd, int out_fd, HelperOptions options);
-    ~HelperServer();
-
-    // Serves requests until stdin closes or "quit" arrives. Stops every guest before returning.
-    int run();
+    ~HelperServer() override;
 
 private:
     struct Job {
@@ -36,12 +34,10 @@ private:
         bool resume_after = false;
     };
 
-    void handle_line(const std::string& line);
-    void dispatch(const std::string& id, const std::string& cmd, const std::vector<std::string>& args);
-    void reply(const std::string& id, bool ok, const std::string& payload);
-    void emit(const std::string& event, const std::vector<std::string>& fields);
-    void write_out(const std::string& line);
-    void tick();
+    void dispatch(const std::string& id, const std::string& cmd, const std::vector<std::string>& args) override;
+    void tick() override;
+    // Stops every guest
+    void shutdown() override;
 
     void cmd_start(const std::string& id, const std::vector<std::string>& args);
     void cmd_stop(const std::string& id, const std::vector<std::string>& args, bool force);
@@ -61,11 +57,7 @@ private:
     bool is_active(const Container* c) const;
     AgentLink* agent_for(const std::string& instance);
 
-    int in_fd_;
-    int out_fd_;
     HelperOptions options_;
-    std::string inbox_;
-    bool quit_ = false;
     std::unordered_map<std::string, int64_t> handles_;
     std::unordered_map<std::string, std::string> last_state_;
     std::unordered_map<std::string, std::unique_ptr<AgentLink>> agents_;

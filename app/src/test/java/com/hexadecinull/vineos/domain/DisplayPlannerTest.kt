@@ -35,6 +35,13 @@ class DisplayPlannerTest {
     }
 
     @Test
+    fun `native keeps the phone's resolution`() {
+        val plan = DisplayPlanner.plan(1080, 2340, ScreenFit.FILL, GuestResolution.NATIVE)
+        assertThat(plan.width).isEqualTo(1080)
+        assertThat(plan.height).isEqualTo(2336)
+    }
+
+    @Test
     fun `sides are multiples of 8`() {
         for (quality in GuestResolution.entries) {
             val plan = DisplayPlanner.plan(1079, 2399, ScreenFit.FILL, quality)

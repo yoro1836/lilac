@@ -103,6 +103,37 @@ native-display-tests:
   script:
     - sh app/src/main/cpp/tests/native/run_display_tests.sh
 
+native-wayland-tests:
+  extends: .rules-ci
+  stage: test
+  image: gcc:14
+  script:
+    - apt-get update -qq && apt-get install -y -qq libwayland-dev libwayland-bin wayland-protocols pkg-config > /dev/null
+    - sh app/src/main/cpp/tests/native/run_wayland_tests.sh
+
+native-pulse-tests:
+  extends: .rules-ci
+  stage: test
+  image: gcc:14
+  script:
+    - apt-get update -qq && apt-get install -y -qq libpulse-dev libasound2-dev libasound2-plugins pkg-config > /dev/null
+    - sh app/src/main/cpp/tests/native/run_pulse_tests.sh
+
+native-rootless-tests:
+  extends: .rules-ci
+  stage: test
+  image: gcc:14
+  script:
+    - apt-get update -qq && apt-get install -y -qq python3 e2fsprogs zlib1g-dev > /dev/null
+    - sh app/src/main/cpp/tests/native/run_rootless_tests.sh
+
+tawcroot-host-tests:
+  extends: .rules-ci
+  stage: test
+  image: gcc:14
+  script:
+    - tawcroot/test.sh --host
+
 rom-kit-tests:
   extends: .rules-ci
   stage: test
@@ -142,12 +173,12 @@ nightly:
     - if: $SCHEDULE_TYPE == "nightly" && $CI_PROJECT_PATH =~ /^hexadecinull\/vineos\/vineos$/i
   script:
     - ./gradlew :app:testDebugUnitTest :app:assembleDebug
-    - cp app/build/outputs/apk/debug/app-debug.apk "VineOS-nightly-$(date +%Y%m%d)-${CI_COMMIT_SHORT_SHA}.apk"
+    - cp app/build/outputs/apk/debug/app-debug.apk "Wayondroid-nightly-$(date +%Y%m%d)-${CI_COMMIT_SHORT_SHA}.apk"
   artifacts:
     name: nightly-$CI_COMMIT_SHORT_SHA
     expire_in: 7 days
     paths:
-      - VineOS-nightly-*.apk
+      - Wayondroid-nightly-*.apk
 
 release-validate:
   stage: test
@@ -206,10 +237,10 @@ release-build:
     - |
       set -e
       VERSION="$RELEASE_VERSION_TAG"
-      cp app/build/outputs/apk/release/app-release.apk "VineOS-${VERSION}.apk"
-      cp app/build/outputs/apk/debug/app-debug.apk "VineOS-${VERSION}-debug.apk"
+      cp app/build/outputs/apk/release/app-release.apk "Wayondroid-${VERSION}.apk"
+      cp app/build/outputs/apk/debug/app-debug.apk "Wayondroid-${VERSION}-debug.apk"
       PACKAGE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/vineos/${VERSION}"
-      for apk in "VineOS-${VERSION}.apk" "VineOS-${VERSION}-debug.apk"; do
+      for apk in "Wayondroid-${VERSION}.apk" "Wayondroid-${VERSION}-debug.apk"; do
         curl --fail --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "$apk" "${PACKAGE_URL}/${apk}"
       done
     - scripts/ci/release-notes.sh release_body.md
@@ -219,7 +250,7 @@ release-build:
     name: release-apk-$RELEASE_VERSION_TAG
     expire_in: 90 days
     paths:
-      - VineOS-*.apk
+      - Wayondroid-*.apk
       - release_body.md
 
 release-publish:
@@ -232,10 +263,10 @@ release-publish:
   rules:
     - if: $RELEASE_VERSION_TAG && $CI_PIPELINE_SOURCE == "web" && $RELEASE_PRERELEASE == "true"
       variables:
-        RELEASE_NAME: "VineOS $RELEASE_VERSION_TAG (pre-release)"
+        RELEASE_NAME: "Wayondroid $RELEASE_VERSION_TAG (pre-release)"
     - if: $RELEASE_VERSION_TAG && $CI_PIPELINE_SOURCE == "web"
       variables:
-        RELEASE_NAME: "VineOS $RELEASE_VERSION_TAG"
+        RELEASE_NAME: "Wayondroid $RELEASE_VERSION_TAG"
   script:
     - echo "Creating release $RELEASE_VERSION_TAG"
   release:
@@ -245,11 +276,11 @@ release-publish:
     ref: $CI_COMMIT_SHA
     assets:
       links:
-        - name: VineOS-$RELEASE_VERSION_TAG.apk
-          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vineos/$RELEASE_VERSION_TAG/VineOS-$RELEASE_VERSION_TAG.apk
+        - name: Wayondroid-$RELEASE_VERSION_TAG.apk
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vineos/$RELEASE_VERSION_TAG/Wayondroid-$RELEASE_VERSION_TAG.apk
           link_type: package
-        - name: VineOS-$RELEASE_VERSION_TAG-debug.apk
-          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vineos/$RELEASE_VERSION_TAG/VineOS-$RELEASE_VERSION_TAG-debug.apk
+        - name: Wayondroid-$RELEASE_VERSION_TAG-debug.apk
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vineos/$RELEASE_VERSION_TAG/Wayondroid-$RELEASE_VERSION_TAG-debug.apk
           link_type: package
 
 renovate:

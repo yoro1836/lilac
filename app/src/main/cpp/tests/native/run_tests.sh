@@ -15,9 +15,11 @@ g++ -std=c++17 -O1 -g -Wall -Wextra -I"$cpp/tests/stubs" -I"$cpp/utils" \
     "$cpp"/container/*.cpp "$cpp/utils/vine_utils.cpp" \
     -lz -o "$out/test_container"
 
+gcc -std=c11 -O1 -g -Wall -Wextra -I"$cpp/../../../../tawcroot/include" -c "$cpp/rootless/ext4_extract.c" -o "$out/ext4_extract.o"
 g++ -std=c++17 -O1 -g -Wall -Wextra -I"$cpp/tests/stubs" -I"$cpp/utils" \
     "$cpp"/helper/*.cpp "$cpp"/container/*.cpp "$cpp"/diagnostics/host_probe.cpp "$cpp"/diagnostics/namespace_probe.cpp \
-    "$cpp/utils/vine_utils.cpp" -lz -o "$out/vine_helper"
+    "$cpp/utils/vine_utils.cpp" "$cpp"/rootless/rootless_*.cpp "$cpp/display/wayland/input_lines.cpp" "$out/ext4_extract.o" \
+    -lz -o "$out/vine_helper"
 
 g++ -std=c++17 -O2 -g -Wall -Wextra -I"$cpp/tests/stubs" -I"$cpp/utils" \
     "$here/test_display.cpp" "$cpp/display/pixel_convert.cpp" "$cpp/display/vinefb_reader.cpp" -lpthread -o "$out/test_display"

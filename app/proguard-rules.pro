@@ -1,6 +1,6 @@
-# VineOS release-build ProGuard/R8 rules.
+# Wayondroid release-build ProGuard/R8 rules.
 # Room, Hilt, and Compose ship their own consumer rules in their AARs, so
-# this file only covers what's specific to VineOS itself.
+# this file only covers what's specific to Wayondroid itself.
 
 # JNI: native methods are resolved by symbol name at runtime, so the
 # declaring classes and method signatures must survive obfuscation.

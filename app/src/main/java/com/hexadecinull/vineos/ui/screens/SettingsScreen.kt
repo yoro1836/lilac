@@ -36,6 +36,7 @@ data class AppSettings(
     val guestResolution: GuestResolution = GuestResolution.BALANCED,
     val avoidCutout: Boolean = false,
     val guestNetwork: Boolean = true,
+    val gpuAcceleration: Boolean = false,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -178,6 +179,13 @@ fun SettingsScreen(
                     onCheckedChange = { onSettingsChange(settings.copy(guestNetwork = it)) }
                 )
                 SwitchSettingsItem(
+                    icon = Icons.Outlined.Memory,
+                    title = "GPU acceleration (experimental)",
+                    subtitle = "Render rootless instances on your phone's GPU through gfxstream. Takes effect on the next start",
+                    checked = settings.gpuAcceleration,
+                    onCheckedChange = { onSettingsChange(settings.copy(gpuAcceleration = it)) }
+                )
+                SwitchSettingsItem(
                     icon = Icons.Outlined.Code,
                     title = "Show Technical Info",
                     subtitle = "Display kernel version, ABI, namespace info on instance cards",
@@ -205,7 +213,7 @@ fun SettingsScreen(
             SettingsSection(title = "About") {
                 NavigateSettingsItem(
                     icon = Icons.Outlined.Info,
-                    title = "About VineOS",
+                    title = "About Wayondroid",
                     subtitle = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                     onClick = onAboutClick,
                 )

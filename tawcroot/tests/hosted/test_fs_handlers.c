@@ -1,0 +1,698 @@
+/* Hosted handler-level tests for syscalls_fs.c — the openat/stat/
+ * unlink/rename families run in-process under ASan+UBSan against a
+ * real tmpdir rootfs. See hosted.h for what this layer covers vs the
+ * fork-based layers.
+ *
+ * Errno expectations mirror kernel semantics; references are the
+ * path_oracle tests and `man 2` for each call. */
+
+#include <cleat/test.h>
+
+#include <fcntl.h>
+#include <string.h>
+#include <errno.h>
+#include <stdio.h>
+#include <sys/mman.h>
+#include <sys/xattr.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "hosted.h"
+
+/* No tawc_uapi.h here: it pulls kernel uapi headers that clash with
+ * the glibc <fcntl.h> this hosted TU needs. _GNU_SOURCE glibc headers
+ * provide every O_ / AT_ / STATX_ constant these tests use. */
+#include "errno_neg.h"
+#include "path.h"
+#include "syscalls_fs.h"
+#include "sysnr.h"
+
+/* A pointer that is guaranteed unmapped (below the kernel's minimum
+ * mmap address) — the EFAULT probes use it as a wild guest pointer. */
+#define WILD_PTR 0x1000L
+
+/* --- openat: translation basics ------------------------------------- */
+
+test(hosted_openat_absolute_translates_into_rootfs)
+{
+	th_view v;
+	th_setup(&v, "fs-open");
+
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/etc/probe",
+			 O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+	char buf[32] = {0};
+	test_true(read((int)fd, buf, sizeof buf - 1) > 0);
+	test_str_eq(buf, "from-rootfs\n");
+	test_int_eq(close((int)fd), 0);
+
+	th_teardown(&v);
+}
+
+test(hosted_openat_missing_file_enoent)
+{
+	th_view v;
+	th_setup(&v, "fs-enoent");
+
+	test_int_eq(th_sys(TAWC_SYS_openat, AT_FDCWD, "/etc/nope",
+			   O_RDONLY, 0, 0, 0), TAWC_ENOENT);
+
+	th_teardown(&v);
+}
+
+test(hosted_openat_dotdot_escape_clamps_at_root)
+{
+	th_view v;
+	th_setup(&v, "fs-clamp");
+
+	/* Clamped to <rootfs>/etc/probe — must read rootfs bytes, not
+	 * escape toward the host /etc. */
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD,
+			 "/../../../../etc/probe", O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+	char buf[32] = {0};
+	test_true(read((int)fd, buf, sizeof buf - 1) > 0);
+	test_str_eq(buf, "from-rootfs\n");
+	test_int_eq(close((int)fd), 0);
+
+	/* The host file /etc/passwd exists; the view's doesn't. */
+	test_int_eq(th_sys(TAWC_SYS_openat, AT_FDCWD,
+			   "/etc/../../../etc/passwd", O_RDONLY, 0, 0, 0),
+		    TAWC_ENOENT);
+
+	th_teardown(&v);
+}
+
+test(hosted_openat_memoized_symlink_routes_through_target)
+{
+	th_view v;
+	th_setup(&v, "fs-memo");
+
+	/* /lib -> usr/lib is memoized at setup; /lib/probe.so must land
+	 * on <rootfs>/usr/lib/probe.so. */
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/lib/probe.so",
+			 O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+	char buf[32] = {0};
+	test_true(read((int)fd, buf, sizeof buf - 1) > 0);
+	test_str_eq(buf, "fake-lib\n");
+	test_int_eq(close((int)fd), 0);
+
+	th_teardown(&v);
+}
+
+test(hosted_openat_null_and_wild_path_efault)
+{
+	th_view v;
+	th_setup(&v, "fs-efault");
+
+	test_int_eq(th_sys(TAWC_SYS_openat, AT_FDCWD, 0L,
+			   O_RDONLY, 0, 0, 0), TAWC_EFAULT);
+	test_int_eq(th_sys(TAWC_SYS_openat, AT_FDCWD, WILD_PTR,
+			   O_RDONLY, 0, 0, 0), TAWC_EFAULT);
+
+	th_teardown(&v);
+}
+
+/* --- trailing-slash kernel semantics --------------------------------- */
+
+test(hosted_trailing_slash_on_regular_file_enotdir)
+{
+	th_view v;
+	th_setup(&v, "fs-tslash");
+
+	test_int_eq(th_sys(TAWC_SYS_openat, AT_FDCWD, "/etc/probe/",
+			   O_RDONLY, 0, 0, 0), TAWC_ENOTDIR);
+
+	struct stat st;
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/etc/probe/",
+			   &st, 0, 0, 0), TAWC_ENOTDIR);
+
+	/* On a directory a trailing slash is fine. */
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/etc/sub/",
+			   &st, 0, 0, 0), 0);
+	test_true(S_ISDIR(st.st_mode));
+
+	th_teardown(&v);
+}
+
+test(hosted_trailing_slash_missing_leaf_creation)
+{
+	th_view v;
+	th_setup(&v, "fs-tslash2");
+
+	/* O_CREAT with a trailing slash must not create anything. */
+	test_int_eq(th_sys(TAWC_SYS_openat, AT_FDCWD, "/run/new/",
+			   O_WRONLY | O_CREAT, 0644, 0, 0), TAWC_EISDIR);
+	struct stat st;
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/run/new",
+			   &st, AT_SYMLINK_NOFOLLOW, 0, 0), TAWC_ENOENT);
+
+	/* mkdirat with a trailing slash is fine (kernel allows it). */
+	test_int_eq(th_sys(TAWC_SYS_mkdirat, AT_FDCWD, "/run/newdir/",
+			   0755, 0, 0, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/run/newdir",
+			   &st, 0, 0, 0), 0);
+	test_true(S_ISDIR(st.st_mode));
+
+	th_teardown(&v);
+}
+
+/* --- fake-root stat decoration --------------------------------------- */
+
+test(hosted_fstatat_decorates_uid_gid_zero)
+{
+	th_view v;
+	th_setup(&v, "fs-stat");
+
+	struct stat st;
+	st.st_uid = 99;
+	st.st_gid = 99;
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/etc/probe",
+			   &st, 0, 0, 0), 0);
+	test_int_eq(st.st_uid, 0);
+	test_int_eq(st.st_gid, 0);
+	test_true(S_ISREG(st.st_mode));
+
+	/* statx decorates the same way. */
+	struct statx stx;
+	memset(&stx, 0xff, sizeof stx);
+	test_int_eq(th_sys(TAWC_SYS_statx, AT_FDCWD, "/etc/probe",
+			   0, STATX_BASIC_STATS, &stx, 0), 0);
+	test_int_eq(stx.stx_uid, 0);
+	test_int_eq(stx.stx_gid, 0);
+
+	/* Output-buffer EFAULT safety: good path, wild *st. */
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/etc/probe",
+			   WILD_PTR, 0, 0, 0), TAWC_EFAULT);
+
+	th_teardown(&v);
+}
+
+#ifndef STATX_MNT_ID
+# define STATX_MNT_ID 0x00001000U
+#endif
+#ifndef STATX_MNT_ID_UNIQUE
+# define STATX_MNT_ID_UNIQUE 0x00004000U
+#endif
+
+test(hosted_statx_mnt_id_present)
+{
+	th_view v;
+	th_setup(&v, "fs-mntid");
+
+	/* systemd >=260 statx()es with STATX_MNT_ID and hard-fails with
+	 * EUNATCH when the result lacks it. Pre-5.8 kernels can't supply
+	 * it, so handle_statx synthesizes it from /proc/self/fdinfo. The
+	 * guest-visible contract on every kernel: asking for a mount id
+	 * yields one. (Value check: no real mount view hands a test
+	 * tmpdir mount id 0, and on old-kernel device runs — where this
+	 * test rides the emulation — a zero would mean the mask bit was
+	 * set without the value being written.) */
+	struct statx stx;
+	memset(&stx, 0, sizeof stx);
+	test_int_eq(th_sys(TAWC_SYS_statx, AT_FDCWD, "/etc/probe", 0,
+			   STATX_BASIC_STATS | STATX_MNT_ID, &stx, 0), 0);
+	test_true(stx.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE));
+	test_true(stx.stx_mnt_id != 0);
+
+	/* The AT_FDCWD + AT_EMPTY_PATH shape (statx of the cwd): fdinfo
+	 * has no entry for the sentinel, so the fill must pin the cwd
+	 * itself rather than build /proc/self/fdinfo/-100. */
+	memset(&stx, 0, sizeof stx);
+	test_int_eq(th_sys(TAWC_SYS_statx, AT_FDCWD, "", AT_EMPTY_PATH,
+			   STATX_BASIC_STATS | STATX_MNT_ID, &stx, 0), 0);
+	test_true(stx.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE));
+	test_true(stx.stx_mnt_id != 0);
+
+	th_teardown(&v);
+}
+
+test(hosted_shm_statx_mnt_id_present)
+{
+	th_view v;
+	th_setup(&v, "fs-shmmnt");
+
+	/* The /dev/shm intercept synthesizes both statx shapes (memfd
+	 * for entries, fully synthetic for the dir). systemd chase()s
+	 * into /dev/shm (tmpfiles aging), so both must report a mount
+	 * id, and the same one — the dir and its entries live on the
+	 * kernel's single internal shm_mnt. */
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/dev/shm/mntprobe",
+			 O_RDWR | O_CREAT, 0600, 0, 0);
+	test_true(fd >= 0);
+
+	struct statx dirx, namex;
+	memset(&dirx, 0, sizeof dirx);
+	memset(&namex, 0, sizeof namex);
+	test_int_eq(th_sys(TAWC_SYS_statx, AT_FDCWD, "/dev/shm", 0,
+			   STATX_BASIC_STATS | STATX_MNT_ID, &dirx, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_statx, AT_FDCWD, "/dev/shm/mntprobe",
+			   0, STATX_BASIC_STATS | STATX_MNT_ID, &namex, 0),
+		    0);
+	test_true(dirx.stx_mask & STATX_MNT_ID);
+	test_true(namex.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE));
+	/* No !=0 check here: shm_mnt is kernel-internal and its mount id
+	 * genuinely can be 0 (observed on the dev host). Equality is the
+	 * meaningful property. */
+	test_true(dirx.stx_mnt_id == namex.stx_mnt_id);
+
+	test_int_eq(close((int)fd), 0);
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD,
+			   "/dev/shm/mntprobe", 0, 0, 0, 0), 0);
+	th_teardown(&v);
+}
+
+test(hosted_statx_mnt_id_fdinfo_parser_matches_kernel)
+{
+	th_view v;
+	th_setup(&v, "fs-mntid2");
+
+	/* Drive the fdinfo fallback directly (a >=5.8 host kernel
+	 * supplies STATX_MNT_ID natively, so the emulation never runs
+	 * through the handler there): hand the fill a zeroed statx so
+	 * its own mask guard can't short-circuit, then check the parsed
+	 * value against the kernel's — ground truth wherever the kernel
+	 * supports the bit, still a parse/shape check where it doesn't
+	 * (old-kernel device runs). */
+	int fd = open(v.root, O_PATH | O_CLOEXEC);
+	test_true(fd >= 0);
+
+	struct statx got;
+	memset(&got, 0, sizeof got);
+	tawcroot_statx_fill_mnt_id(fd, NULL, STATX_MNT_ID, &got);
+	test_true(got.stx_mask & STATX_MNT_ID);
+	test_true(got.stx_mnt_id != 0);
+
+	struct statx want;
+	memset(&want, 0, sizeof want);
+	if (syscall(TAWC_SYS_statx, fd, "", AT_EMPTY_PATH, STATX_MNT_ID,
+		    &want) == 0 &&
+	    (want.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE)))
+		test_true(got.stx_mnt_id == want.stx_mnt_id);
+
+	test_int_eq(close(fd), 0);
+	th_teardown(&v);
+}
+
+/* --- write-side ops: create, rename, unlink --------------------------- */
+
+test(hosted_create_rename_unlink_cycle)
+{
+	th_view v;
+	th_setup(&v, "fs-cycle");
+
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/run/a",
+			 O_WRONLY | O_CREAT | O_EXCL, 0644, 0, 0);
+	test_true(fd >= 0);
+	test_true(write((int)fd, "x", 1) == 1);
+	test_int_eq(close((int)fd), 0);
+
+	/* Create must have landed inside the rootfs tree. */
+	char host[4200];
+	snprintf(host, sizeof host, "%s/run/a", v.root);
+	struct stat st;
+	test_int_eq(stat(host, &st), 0);
+
+	/* O_EXCL on the now-existing leaf: EEXIST. */
+	test_int_eq(th_sys(TAWC_SYS_openat, AT_FDCWD, "/run/a",
+			   O_WRONLY | O_CREAT | O_EXCL, 0644, 0, 0),
+		    TAWC_EEXIST);
+
+	/* renameat2 within the view. */
+	test_int_eq(th_sys(TAWC_SYS_renameat2, AT_FDCWD, "/run/a",
+			   AT_FDCWD, "/run/b", 0, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/run/a",
+			   &st, 0, 0, 0), TAWC_ENOENT);
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/run/b",
+			   &st, 0, 0, 0), 0);
+
+	/* unlinkat the destination; view is clean again. */
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD, "/run/b",
+			   0, 0, 0, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/run/b",
+			   &st, 0, 0, 0), TAWC_ENOENT);
+
+	th_teardown(&v);
+}
+
+test(hosted_unlinkat_semantics)
+{
+	th_view v;
+	th_setup(&v, "fs-unlink");
+
+	/* unlinkat on a dir without AT_REMOVEDIR: EISDIR. */
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD, "/etc/sub",
+			   0, 0, 0, 0), TAWC_EISDIR);
+	/* With AT_REMOVEDIR on a non-empty dir's parent content: works on
+	 * the empty /etc/sub. */
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD, "/etc/sub",
+			   AT_REMOVEDIR, 0, 0, 0), 0);
+	/* unlink on a symlink removes the link, not the target. */
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD, "/lib",
+			   0, 0, 0, 0), 0);
+	struct stat st;
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/usr/lib/probe.so",
+			   &st, 0, 0, 0), 0);
+
+	th_teardown(&v);
+}
+
+test(hosted_symlinkat_and_readlinkat)
+{
+	th_view v;
+	th_setup(&v, "fs-symlink");
+
+	test_int_eq(th_sys(TAWC_SYS_symlinkat, "/etc/probe", AT_FDCWD,
+			   "/run/link", 0, 0, 0), 0);
+
+	char buf[64] = {0};
+	long n = th_sys(TAWC_SYS_readlinkat, AT_FDCWD, "/run/link",
+			buf, sizeof buf - 1, 0, 0);
+	test_int_eq(n, (long)strlen("/etc/probe"));
+	test_str_eq(buf, "/etc/probe");
+
+	/* NOFOLLOW leaf semantics: lstat sees the link, stat follows. */
+	struct stat st;
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/run/link",
+			   &st, AT_SYMLINK_NOFOLLOW, 0, 0), 0);
+	test_true(S_ISLNK(st.st_mode));
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/run/link",
+			   &st, 0, 0, 0), 0);
+	test_true(S_ISREG(st.st_mode));
+
+	/* readlinkat on a directory: EINVAL (not a symlink). */
+	test_int_eq(th_sys(TAWC_SYS_readlinkat, AT_FDCWD, "/etc",
+			   buf, sizeof buf - 1, 0, 0), TAWC_EINVAL);
+	/* readlinkat on the rootfs root: EINVAL. */
+	test_int_eq(th_sys(TAWC_SYS_readlinkat, AT_FDCWD, "/",
+			   buf, sizeof buf - 1, 0, 0), TAWC_EINVAL);
+
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD, "/run/link",
+			   0, 0, 0, 0), 0);
+	th_teardown(&v);
+}
+
+test(hosted_symlink_absolute_target_clamped_to_view)
+{
+	th_view v;
+	th_setup(&v, "fs-symclamp");
+
+	/* A symlink whose absolute target names a host-existing path must
+	 * resolve inside the view (ENOENT), never against the host root. */
+	test_int_eq(th_sys(TAWC_SYS_symlinkat, "/etc/passwd", AT_FDCWD,
+			   "/run/evil", 0, 0, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_openat, AT_FDCWD, "/run/evil",
+			   O_RDONLY, 0, 0, 0), TAWC_ENOENT);
+
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD, "/run/evil",
+			   0, 0, 0, 0), 0);
+	th_teardown(&v);
+}
+
+/* --- dirfd-anchored resolution ---------------------------------------- */
+
+test(hosted_dirfd_relative_resolution_and_dotdot_clamp)
+{
+	th_view v;
+	th_setup(&v, "fs-dirfd");
+
+	long dfd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/etc",
+			  O_PATH | O_DIRECTORY | O_CLOEXEC, 0, 0, 0);
+	test_true(dfd >= 0);
+
+	/* Plain relative leaf through a guest dirfd. */
+	long fd = th_sys(TAWC_SYS_openat, dfd, "probe", O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+	test_int_eq(close((int)fd), 0);
+
+	/* `..` through the dirfd must clamp at the rootfs root, not walk
+	 * into the host parent of the tmpdir. */
+	long up = th_sys(TAWC_SYS_openat, dfd, "..",
+			 O_PATH | O_DIRECTORY | O_CLOEXEC, 0, 0, 0);
+	test_true(up >= 0);
+	struct stat st_up, st_root;
+	test_int_eq(fstat((int)up, &st_up), 0);
+	test_int_eq(stat(v.root, &st_root), 0);
+	test_true(st_up.st_ino == st_root.st_ino &&
+		  st_up.st_dev == st_root.st_dev);
+	test_int_eq(close((int)up), 0);
+
+	test_int_eq(close((int)dfd), 0);
+	th_teardown(&v);
+}
+
+test(hosted_relative_path_resolves_through_cwd)
+{
+	th_view v;
+	th_setup(&v, "fs-cwd");
+
+	/* Guest chdir("/etc") → kernel cwd lands inside the rootfs; a
+	 * relative open then reverse-translates through the cwd. */
+	test_int_eq(th_sys(TAWC_SYS_chdir, "/etc", 0, 0, 0, 0, 0), 0);
+
+	char cwd[256] = {0};
+	long n = th_sys(TAWC_SYS_getcwd, cwd, sizeof cwd, 0, 0, 0, 0);
+	test_int_eq(n, 5);  /* "/etc" + NUL, getcwd counts the NUL */
+	test_str_eq(cwd, "/etc");
+
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "probe",
+			 O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+	test_int_eq(close((int)fd), 0);
+
+	th_teardown(&v);
+}
+
+/* --- two-path handlers: EFAULT on either side -------------------------- */
+
+test(hosted_two_path_handlers_efault_either_side)
+{
+	th_view v;
+	th_setup(&v, "fs-efault2");
+
+	test_int_eq(th_sys(TAWC_SYS_renameat2, AT_FDCWD, WILD_PTR,
+			   AT_FDCWD, "/run/x", 0, 0), TAWC_EFAULT);
+	test_int_eq(th_sys(TAWC_SYS_renameat2, AT_FDCWD, "/etc/probe",
+			   AT_FDCWD, WILD_PTR, 0, 0), TAWC_EFAULT);
+	test_int_eq(th_sys(TAWC_SYS_linkat, AT_FDCWD, WILD_PTR,
+			   AT_FDCWD, "/run/x", 0, 0), TAWC_EFAULT);
+	test_int_eq(th_sys(TAWC_SYS_symlinkat, WILD_PTR, AT_FDCWD,
+			   "/run/x", 0, 0, 0), TAWC_EFAULT);
+
+	/* And no side effects from the half-good args. */
+	struct stat st;
+	test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/run/x",
+			   &st, AT_SYMLINK_NOFOLLOW, 0, 0), TAWC_ENOENT);
+
+	th_teardown(&v);
+}
+
+/* --- bind routing ------------------------------------------------------ */
+
+test(hosted_bind_dst_routes_to_bind_src)
+{
+	th_view v;
+	th_setup(&v, "fs-bind");
+	th_add_bind(&v, "/mnt/host");
+
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/mnt/host/probe.txt",
+			 O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+	char buf[32] = {0};
+	test_true(read((int)fd, buf, sizeof buf - 1) > 0);
+	test_str_eq(buf, "from-bind\n");
+	test_int_eq(close((int)fd), 0);
+
+	/* Longest-prefix match: /mnt alone still resolves in the rootfs
+	 * (which has no /mnt) → ENOENT, not the bind. */
+	test_int_eq(th_sys(TAWC_SYS_openat, AT_FDCWD, "/mnt",
+			   O_RDONLY, 0, 0, 0), TAWC_ENOENT);
+
+	th_teardown(&v);
+}
+
+test(hosted_bind_dirfd_dotdot_clamps_at_bind_boundary)
+{
+	th_view v;
+	th_setup(&v, "fs-bindup");
+	th_add_bind(&v, "/mnt/host");
+
+	long dfd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/mnt/host",
+			  O_PATH | O_DIRECTORY | O_CLOEXEC, 0, 0, 0);
+	test_true(dfd >= 0);
+
+	/* `..` from the bind dst goes to guest /mnt → rootfs (no such
+	 * dir) — definitely NOT the host tmpdir parent, where the rootfs
+	 * tree itself ("tawcroot-hosted-fs-bindup-<pid>") is visible. */
+	long rv = th_sys(TAWC_SYS_faccessat, dfd, "../../etc/probe",
+			 0 /*F_OK*/, 0, 0, 0);
+	test_int_eq(rv, 0);  /* clamps to rootfs /etc/probe */
+
+	char evil[4200];
+	snprintf(evil, sizeof evil, "../%s", "..");
+	long esc = th_sys(TAWC_SYS_openat, dfd, evil,
+			  O_PATH | O_DIRECTORY, 0, 0, 0);
+	if (esc >= 0) {
+		/* If it opened, it must be the rootfs root, not the host
+		 * parent of the bind src. */
+		struct stat st_got, st_root;
+		test_int_eq(fstat((int)esc, &st_got), 0);
+		test_int_eq(stat(v.root, &st_root), 0);
+		test_true(st_got.st_ino == st_root.st_ino &&
+			  st_got.st_dev == st_root.st_dev);
+		test_int_eq(close((int)esc), 0);
+	}
+
+	test_int_eq(close((int)dfd), 0);
+	th_teardown(&v);
+}
+
+test(hosted_utimensat_null_path_reserved_dirfd_ebadf)
+{
+	th_view v;
+	th_setup(&v, "fs-utimefd");
+
+	/* NULL pathname (glibc futimens shape) operates on dirfd directly;
+	 * a reserved dirfd must answer EBADF (fdtab.h contract), not touch
+	 * the rootfs dir's timestamps. */
+	test_int_eq(th_sys(TAWC_SYS_utimensat, tawcroot_rootfs_fd,
+			   0 /*NULL path*/, 0 /*times=now*/, 0, 0, 0),
+		    TAWC_EBADF);
+
+	/* The same shape on an ordinary guest fd passes through. */
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/etc/probe",
+			 O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+	test_int_eq(th_sys(TAWC_SYS_utimensat, fd, 0, 0, 0, 0, 0), 0);
+	test_int_eq(close((int)fd), 0);
+
+	th_teardown(&v);
+}
+
+/* The stat family writes the guest's buffer directly (finish_stat_direct):
+ * a bad output pointer must come back EFAULT from the kernel, never fault
+ * inside the handler, and a good one must still carry the fake root
+ * owner. */
+test(hosted_stat_family_bad_out_pointer_efaults)
+{
+	th_view v;
+	th_setup(&v, "stat-direct");
+	long page = sysconf(_SC_PAGESIZE);
+	void *none = mmap(NULL, (size_t)page, PROT_NONE,
+			  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	void *ro = mmap(NULL, (size_t)page, PROT_READ,
+			MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	test_true(none != MAP_FAILED && ro != MAP_FAILED);
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/etc/probe", O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+	void *bad[] = { none, ro, (void *)0x10 };
+	for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+		test_int_eq(th_sys(TAWC_SYS_fstatat, AT_FDCWD, "/etc/probe",
+				   bad[i], 0, 0, 0), TAWC_EFAULT);
+		test_int_eq(th_sys(TAWC_SYS_fstatat, fd, "", bad[i],
+				   AT_EMPTY_PATH, 0, 0), TAWC_EFAULT);
+		test_int_eq(th_sys(TAWC_SYS_fstat, fd, bad[i], 0, 0, 0, 0),
+			    TAWC_EFAULT);
+		test_int_eq(th_sys(TAWC_SYS_statx, AT_FDCWD, "/etc/probe", 0,
+				   STATX_BASIC_STATS, bad[i], 0), TAWC_EFAULT);
+		test_int_eq(th_sys(TAWC_SYS_statx, fd, "", AT_EMPTY_PATH,
+				   STATX_BASIC_STATS, bad[i], 0), TAWC_EFAULT);
+	}
+	struct stat st;
+	struct statx sx;
+	memset(&st, 0xff, sizeof st);
+	memset(&sx, 0xff, sizeof sx);
+	test_int_eq(th_sys(TAWC_SYS_fstat, fd, &st, 0, 0, 0, 0), 0);
+	test_int_eq((long)st.st_uid, 0);
+	test_true(S_ISREG(st.st_mode));
+	test_int_eq(th_sys(TAWC_SYS_statx, AT_FDCWD, "/etc/probe", 0,
+			   STATX_BASIC_STATS, &sx, 0), 0);
+	test_int_eq((long)sx.stx_uid, 0);
+	test_true(sx.stx_mask & STATX_UID);
+	close((int)fd);
+	munmap(none, (size_t)page);
+	munmap(ro, (size_t)page);
+	th_teardown(&v);
+}
+
+/* Rootfs xattr targets go to the kernel as the root's host path rather
+ * than /proc/self/fd/<root>/...; results must match the host, a leaf
+ * symlink must not be followed by the l* variants, and a chroot must
+ * move the anchor. */
+static char last_xattr_path[4096];
+static bool note_xattr(long nr, const long args[6], long *ret)
+{
+	(void)ret;
+	if (nr == TAWC_SYS_lgetxattr || nr == TAWC_SYS_llistxattr ||
+	    nr == TAWC_SYS_getxattr)
+		snprintf(last_xattr_path, sizeof last_xattr_path, "%s",
+			 (const char *)args[0]);
+	return false;
+}
+
+test(hosted_xattr_rootfs_uses_host_path)
+{
+	th_view v;
+	th_setup(&v, "xattr-host");
+	char host[4300], val[32];
+	snprintf(host, sizeof host, "%s/etc/probe", v.root);
+	if (setxattr(host, "user.k", "v1", 2, 0) != 0) {
+		th_teardown(&v);
+		return;   /* filesystem without user xattrs */
+	}
+	tawcroot_test_raw_hook = note_xattr;
+	memset(val, 0, sizeof val);
+	test_int_eq(th_sys(TAWC_SYS_lgetxattr, "/etc/probe", "user.k", val,
+			   sizeof val, 0, 0), 2);
+	test_str_eq(val, "v1");
+	test_str_eq(last_xattr_path, host);
+	char list[256];
+	long n = th_sys(TAWC_SYS_llistxattr, "/etc/probe", list, sizeof list,
+			0, 0, 0);
+	test_int_eq(n, llistxattr(host, list, sizeof list));
+	/* l* on the /lib -> usr/lib symlink sees the link, not the dir. */
+	snprintf(host, sizeof host, "%s/lib", v.root);
+	long want = lgetxattr(host, "user.k", val, sizeof val);
+	if (want < 0) want = -errno;
+	long got = th_sys(TAWC_SYS_lgetxattr, "/lib", "user.k", val,
+			  sizeof val, 0, 0);
+	test_int_eq(got, want);
+	test_str_eq(last_xattr_path, host);
+	test_int_eq(th_sys(TAWC_SYS_chroot, "/etc", 0, 0, 0, 0, 0), 0);
+	memset(val, 0, sizeof val);
+	test_int_eq(th_sys(TAWC_SYS_getxattr, "/probe", "user.k", val,
+			   sizeof val, 0, 0), 2);
+	snprintf(host, sizeof host, "%s/etc/probe", v.root);
+	test_str_eq(last_xattr_path, host);
+	tawcroot_test_raw_hook = NULL;
+	th_teardown(&v);
+}
+
+/* An app uid may not relabel: a denied security.selinux write succeeds
+ * without effect, other denied xattr writes keep their errno. */
+static bool deny_setxattr(long nr, const long args[6], long *ret)
+{
+	(void)args;
+	if (nr != TAWC_SYS_lsetxattr && nr != TAWC_SYS_setxattr) return false;
+	*ret = -EACCES;
+	return true;
+}
+
+test(hosted_xattr_selinux_label_write_is_accepted)
+{
+	th_view v;
+	th_setup(&v, "xattr-selinux");
+	static const char label[] = "u:object_r:system_file:s0";
+	tawcroot_test_raw_hook = deny_setxattr;
+	test_int_eq(th_sys(TAWC_SYS_lsetxattr, "/etc/probe", "security.selinux",
+			   label, sizeof label, 0, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_setxattr, "/etc/probe", "security.selinux",
+			   label, sizeof label, 0, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_lsetxattr, "/etc/probe", "user.k",
+			   "v1", 2, 0, 0), -EACCES);
+	test_int_eq(th_sys(TAWC_SYS_lsetxattr, "/etc/probe", "security.selinux",
+			   label, 0, 0, 0), -EACCES);
+	tawcroot_test_raw_hook = NULL;
+	th_teardown(&v);
+}

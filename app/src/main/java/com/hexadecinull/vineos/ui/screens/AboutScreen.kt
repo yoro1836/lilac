@@ -19,7 +19,7 @@ fun AboutScreen(sections: List<AboutInfoSection>, onBack: () -> Unit, onLicenses
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("About VineOS") },
+                title = { Text("About Wayondroid") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -51,7 +51,7 @@ fun AboutScreen(sections: List<AboutInfoSection>, onBack: () -> Unit, onLicenses
                 NavigateSettingsItem(
                     icon = Icons.Outlined.Article,
                     title = "Licenses",
-                    subtitle = "Third-party libraries bundled with VineOS",
+                    subtitle = "Third-party libraries bundled with Wayondroid",
                     onClick = onLicenses,
                 )
             }

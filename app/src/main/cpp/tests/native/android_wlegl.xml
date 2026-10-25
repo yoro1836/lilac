@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- android_wlegl v1, the part Waydroid's hwcomposer uses (libhybris'
+     protocol), for the vine_wl tests -->
+<protocol name="android_wlegl">
+  <interface name="android_wlegl" version="1">
+    <enum name="error">
+      <entry name="bad_handle" value="0"/>
+      <entry name="bad_value" value="1"/>
+    </enum>
+    <request name="create_handle">
+      <arg name="id" type="new_id" interface="android_wlegl_handle"/>
+      <arg name="num_fds" type="int"/>
+      <arg name="ints" type="array"/>
+    </request>
+    <request name="create_buffer">
+      <arg name="id" type="new_id" interface="wl_buffer"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="stride" type="int"/>
+      <arg name="format" type="int"/>
+      <arg name="usage" type="int"/>
+      <arg name="native_handle" type="object" interface="android_wlegl_handle"/>
+    </request>
+  </interface>
+  <interface name="android_wlegl_handle" version="1">
+    <enum name="error">
+      <entry name="too_many_fds" value="0"/>
+    </enum>
+    <request name="add_fd">
+      <arg name="fd" type="fd"/>
+    </request>
+    <request name="destroy" type="destructor"/>
+  </interface>
+</protocol>

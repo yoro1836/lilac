@@ -2,6 +2,7 @@ package com.hexadecinull.vineos
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -39,6 +40,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.hexadecinull.vineos.domain.shortcuts.ShortcutLauncher
 import com.hexadecinull.vineos.domain.shortcuts.ShortcutTarget
+import com.hexadecinull.vineos.ui.GuestKeys
 import com.hexadecinull.vineos.ui.navigation.Screen
 import com.hexadecinull.vineos.ui.navigation.bottomNavItems
 import com.hexadecinull.vineos.ui.screens.AboutScreen
@@ -53,7 +55,7 @@ import com.hexadecinull.vineos.ui.screens.ROMDetailScreen
 import com.hexadecinull.vineos.ui.screens.ROMsScreen
 import com.hexadecinull.vineos.ui.screens.SettingsScreen
 import com.hexadecinull.vineos.ui.screens.VMDisplayScreen
-import com.hexadecinull.vineos.ui.theme.VineOSTheme
+import com.hexadecinull.vineos.ui.theme.WayondroidTheme
 import com.hexadecinull.vineos.ui.viewmodel.AboutViewModel
 import com.hexadecinull.vineos.ui.viewmodel.HomeViewModel
 import com.hexadecinull.vineos.ui.viewmodel.ROMsViewModel
@@ -68,6 +70,9 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var shortcutLauncher: ShortcutLauncher
 
     private var pendingRoute by mutableStateOf<String?>(null)
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        GuestKeys.handler?.invoke(event) == true || super.dispatchKeyEvent(event)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,8 +90,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            VineOSTheme(dynamicColor = settings.dynamicColor) {
-                VineOSApp(
+            WayondroidTheme(dynamicColor = settings.dynamicColor) {
+                WayondroidApp(
                     settings = settings,
                     onSettingsChange = { settingsVm.update(it) },
                     pendingRoute = pendingRoute,
@@ -121,7 +126,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun VineOSApp(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, pendingRoute: String?, onRouteHandled: () -> Unit) {
+fun WayondroidApp(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit, pendingRoute: String?, onRouteHandled: () -> Unit) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     // The guest screen draws edge to edge, so the Scaffold must not reserve space for the system bars there

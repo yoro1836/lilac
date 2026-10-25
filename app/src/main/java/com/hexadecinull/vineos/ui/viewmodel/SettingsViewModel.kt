@@ -43,6 +43,8 @@ class SettingsViewModel @Inject constructor(private val prefs: AppPreferences) :
         partial.copy(avoidCutout = value)
     }.combine(prefs.guestNetwork) { partial, value ->
         partial.copy(guestNetwork = value)
+    }.combine(prefs.gpuAcceleration) { partial, value ->
+        partial.copy(gpuAcceleration = value)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(),
@@ -64,6 +66,7 @@ class SettingsViewModel @Inject constructor(private val prefs: AppPreferences) :
             if (newSettings.guestResolution != current.guestResolution) prefs.setGuestResolution(newSettings.guestResolution)
             if (newSettings.avoidCutout != current.avoidCutout) prefs.setAvoidCutout(newSettings.avoidCutout)
             if (newSettings.guestNetwork != current.guestNetwork) prefs.setGuestNetwork(newSettings.guestNetwork)
+            if (newSettings.gpuAcceleration != current.gpuAcceleration) prefs.setGpuAcceleration(newSettings.gpuAcceleration)
         }
     }
 }

@@ -25,4 +25,10 @@ class HelperLauncherTest {
         assertThat(HelperLauncher.shellQuote("a'b")).isEqualTo("'a'\\''b'")
         assertThat(HelperLauncher.shellQuote("x; rm -rf /")).isEqualTo("'x; rm -rf /'")
     }
+
+    @Test
+    fun `rootless command runs the helper directly`() {
+        val cmd = HelperLauncher.rootlessCommand("/lib", "/base")
+        assertThat(cmd).containsExactly("/lib/libvine_helper.so", "--rootless", "--base", "/base").inOrder()
+    }
 }

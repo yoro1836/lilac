@@ -5,7 +5,9 @@ import android.content.Intent
 import android.os.Build
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
+import com.hexadecinull.vineos.BuildConfig
 import com.hexadecinull.vineos.data.models.AbiCompat
+import com.hexadecinull.vineos.data.models.GuestResolution
 import com.hexadecinull.vineos.data.models.ROMImage
 import com.hexadecinull.vineos.data.models.VMInstance
 import com.hexadecinull.vineos.data.models.VMStatus
@@ -77,14 +79,30 @@ class VineVMManager @Inject constructor(
         ProcessBuilder(HelperLauncher.command(libDir, provisioner.instancesDir.path, android.os.Process.myUid(), qemu)).start()
     }
 
+    // Waydroid images under tawcroot, no root needed (docs/rootless.md)
+    private val rootlessHelper = HelperClient(scope, requireRoot = false) {
+        val debugSocket = if (BuildConfig.DEBUG) File(context.filesDir, "rootless.sock").path else null
+        ProcessBuilder(HelperLauncher.rootlessCommand(context.applicationInfo.nativeLibraryDir, provisioner.instancesDir.path, debugSocket))
+            .start()
+    }
+
     val helperState: StateFlow<HelperState> = helper.state
     val snapshotEvents: SharedFlow<SnapshotEvent> = snapshotEventFlow.asSharedFlow()
 
     init {
         scope.launch { instanceRepo.resetAllStatuses() }
         scope.launch { for ((id, status) in persistQueue) runCatching { instanceRepo.updateStatus(id, status) } }
-        scope.launch { helper.events.collect(::onHelperEvent) }
+        scope.launch { helper.events.collect { onHelperEvent(it, rootless = false) } }
+        scope.launch { rootlessHelper.events.collect { onHelperEvent(it, rootless = true) } }
     }
+
+    // System-as-root images (Waydroid, no ramdisk) boot on the rootless engine, the others need root
+    fun isRootless(instanceId: String): Boolean = !File(provisioner.instanceDir(instanceId), "ramdisk.img").exists()
+
+    private fun helperFor(instanceId: String): HelperClient = if (isRootless(instanceId)) rootlessHelper else helper
+
+    // Starts the instance's helper if needed; the failure text or null
+    private suspend fun connectFor(instanceId: String): String? = (helperFor(instanceId).connect() as? HelperState.Failed)?.reason
 
     fun isRomCompatible(rom: ROMImage): Boolean = AbiCompat.romRunMode(rom, hostAbis) != AbiCompat.RunMode.UNAVAILABLE
 
@@ -109,14 +127,19 @@ class VineVMManager @Inject constructor(
         errorFlows[instance.id]?.value = null
         setStatus(instance.id, VMStatus.BOOTING)
 
-        val up = helper.connect()
+        if (isRootless(instance.id) && hostAbis.none { it == "arm64-v8a" || it == "x86_64" }) {
+            return@withLock fail(instance.id, "The rootless engine needs a 64-bit phone")
+        }
+        val engine = helperFor(instance.id)
+        val up = engine.connect()
         if (up is HelperState.Failed) return@withLock fail(instance.id, up.reason)
 
         val manifest = provisioner.readManifest(File(instance.storagePath))
         val needs32 = manifest.isArm32Only && !hostSupports32bit
         val (screenW, screenH) = deviceScreenSize()
-        val plan = DisplayPlanner.plan(screenW, screenH, prefs.screenFit.first(), prefs.guestResolution.first())
-        val reply = helper.request(
+        val quality = instance.resolution?.let(GuestResolution::fromName) ?: prefs.guestResolution.first()
+        val plan = DisplayPlanner.plan(screenW, screenH, prefs.screenFit.first(), quality)
+        val reply = engine.request(
             "start",
             instance.id,
             instance.storagePath,
@@ -126,7 +149,9 @@ class VineVMManager @Inject constructor(
             "width=${plan.width}",
             "height=${plan.height}",
             "dpi=${plan.dpi}",
+            "refresh=${instance.refreshHz}",
             "network=${if (prefs.guestNetwork.first()) "nat" else "none"}",
+            "graphics=${if (prefs.gpuAcceleration.first()) "gfxstream" else "cpu"}",
             "qemu32=${if (needs32) 1 else 0}",
             timeoutMs = 120_000,
         )
@@ -143,7 +168,8 @@ class VineVMManager @Inject constructor(
 
     private suspend fun halt(instanceId: String, force: Boolean) {
         pendingLaunch.remove(instanceId)
-        if (helper.isReady) helper.request(if (force) "kill" else "stop", instanceId, timeoutMs = 30_000)
+        val engine = helperFor(instanceId)
+        if (engine.isReady) engine.request(if (force) "kill" else "stop", instanceId, timeoutMs = 30_000)
         setStatus(instanceId, VMStatus.STOPPED)
     }
 
@@ -152,7 +178,7 @@ class VineVMManager @Inject constructor(
         halt(instance.id, force = true)
         val dir = File(instance.storagePath)
         if (dir.exists()) dir.deleteRecursively()
-        if (dir.exists() && checkRoot() == null) helper.request("rmtree", dir.path, timeoutMs = 120_000)
+        if (dir.exists() && connectFor(instance.id) == null) helperFor(instance.id).request("rmtree", dir.path, timeoutMs = 120_000)
         shortcutStore.forgetInstance(instance.id)
         statusFlows.remove(instance.id)
         errorFlows.remove(instance.id)
@@ -160,20 +186,20 @@ class VineVMManager @Inject constructor(
 
     fun pauseInstance(instanceId: String) {
         scope.launch {
-            val r = helper.request("pause", instanceId)
+            val r = helperFor(instanceId).request("pause", instanceId)
             if (r.ok) setStatus(instanceId, VMStatus.PAUSED)
         }
     }
 
     fun resumeInstance(instanceId: String) {
         scope.launch {
-            val r = helper.request("resume", instanceId)
+            val r = helperFor(instanceId).request("resume", instanceId)
             if (r.ok) setStatus(instanceId, VMStatus.RUNNING)
         }
     }
 
     fun sendTouch(instanceId: String, action: Int, actionIndex: Int, points: List<TouchPoint>) {
-        helper.send(
+        helperFor(instanceId).send(
             "agent_send",
             instanceId,
             GuestProtocol.touchLine(action, actionIndex, points),
@@ -183,22 +209,27 @@ class VineVMManager @Inject constructor(
 
     // Keys are fire and forget for the agent, so a ping decides between it and the guest's own `input` tool
     suspend fun pressKey(instanceId: String, keycode: Int) {
-        if (helper.request("agent", instanceId, "1500", "ping").ok) {
-            helper.send("agent_send", instanceId, GuestProtocol.keyLine(keycode, true))
-            helper.send("agent_send", instanceId, GuestProtocol.keyLine(keycode, false))
+        val engine = helperFor(instanceId)
+        if (engine.request("agent", instanceId, "1500", "ping").ok) {
+            engine.send("agent_send", instanceId, GuestProtocol.keyLine(keycode, true))
+            engine.send("agent_send", instanceId, GuestProtocol.keyLine(keycode, false))
             return
         }
-        helper.request("exec", instanceId, "5000", "input", "keyevent", keycode.toString())
+        engine.request("exec", instanceId, "5000", "input", "keyevent", keycode.toString())
+    }
+
+    fun sendKey(instanceId: String, keycode: Int, down: Boolean) {
+        helperFor(instanceId).send("agent_send", instanceId, GuestProtocol.keyLine(keycode, down))
     }
 
     fun sendText(instanceId: String, text: String) {
-        helper.send("agent_send", instanceId, GuestProtocol.textLine(text))
+        helperFor(instanceId).send("agent_send", instanceId, GuestProtocol.textLine(text))
     }
 
     suspend fun listApps(instanceId: String): Result<List<GuestApp>> {
-        val failure = checkRoot()
+        val failure = connectFor(instanceId)
         if (failure != null) return Result.failure(IOException(failure))
-        val reply = helper.request("apps", instanceId, timeoutMs = 60_000)
+        val reply = helperFor(instanceId).request("apps", instanceId, timeoutMs = 60_000)
         if (!reply.ok) return Result.failure(IOException(reply.payload))
         val apps = HelperProtocol.parseApps(reply.payload)
         shortcutStore.saveApps(instanceId, apps)
@@ -206,7 +237,7 @@ class VineVMManager @Inject constructor(
     }
 
     suspend fun fetchIcon(instanceId: String, packageName: String): ByteArray? {
-        val reply = helper.request("icon", instanceId, packageName, timeoutMs = 20_000)
+        val reply = helperFor(instanceId).request("icon", instanceId, packageName, timeoutMs = 20_000)
         if (!reply.ok) return null
         val png = HelperProtocol.decodeIcon(reply.payload) ?: return null
         shortcutStore.saveIcon(instanceId, packageName, png)
@@ -225,14 +256,15 @@ class VineVMManager @Inject constructor(
 
     private suspend fun launchWithRetry(instanceId: String, packageName: String) {
         repeat(LAUNCH_ATTEMPTS) {
-            if (helper.request("launch", instanceId, packageName, timeoutMs = 20_000).ok) return
+            if (helperFor(instanceId).request("launch", instanceId, packageName, timeoutMs = 20_000).ok) return
             delay(LAUNCH_RETRY_MS)
         }
     }
 
     suspend fun listSnapshots(instance: VMInstance): List<SnapshotInfo> {
-        if (helper.isReady) {
-            val reply = helper.request("snapshots", instance.storagePath)
+        val engine = helperFor(instance.id)
+        if (engine.isReady) {
+            val reply = engine.request("snapshots", instance.storagePath)
             if (reply.ok) return HelperProtocol.parseSnapshots(reply.payload)
         }
         val dir = File(instance.storagePath, "snapshots")
@@ -246,22 +278,23 @@ class VineVMManager @Inject constructor(
     suspend fun restoreSnapshot(instance: VMInstance, name: String): HelperReply = snapshotCall("restore", instance, name)
 
     suspend fun deleteSnapshot(instance: VMInstance, name: String): HelperReply {
-        val failure = checkRoot()
+        val failure = connectFor(instance.id)
         if (failure != null) return HelperReply(false, failure)
-        return helper.request("delete_snapshot", instance.storagePath, name)
+        return helperFor(instance.id).request("delete_snapshot", instance.storagePath, name)
     }
 
     private suspend fun snapshotCall(command: String, instance: VMInstance, name: String): HelperReply {
-        val failure = checkRoot()
+        val failure = connectFor(instance.id)
         if (failure != null) return HelperReply(false, failure)
-        return helper.request(command, instance.id, instance.storagePath, name, timeoutMs = 30_000)
+        return helperFor(instance.id).request(command, instance.id, instance.storagePath, name, timeoutMs = 30_000)
     }
 
     suspend fun fetchDiagnostics(instanceId: String): String {
         val lastError = errorFlows[instanceId]?.value
         val errorLine = if (lastError.isNullOrBlank()) "" else "Last error: $lastError\n\n"
-        if (helper.isReady && isActive(instanceId)) {
-            val reply = helper.request("diag", instanceId)
+        val engine = helperFor(instanceId)
+        if (engine.isReady && isActive(instanceId)) {
+            val reply = engine.request("diag", instanceId)
             if (reply.ok) return errorLine + reply.payload
         }
         return errorLine + deviceReport()
@@ -281,10 +314,15 @@ class VineVMManager @Inject constructor(
             is HelperState.Failed -> sb.append("Root helper: ").append(s.reason).append('\n')
             else -> sb.append("Root helper: not started yet. It starts with the first instance.\n")
         }
+        when (val s = rootlessHelper.state.value) {
+            is HelperState.Ready -> sb.append("Rootless engine: running\n")
+            is HelperState.Failed -> sb.append("Rootless engine: ").append(s.reason).append('\n')
+            else -> sb.append("Rootless engine: not started yet\n")
+        }
         return sb.toString()
     }
 
-    private fun onHelperEvent(event: HelperEvent) {
+    private fun onHelperEvent(event: HelperEvent, rootless: Boolean) {
         val f = event.fields
         when (event.name) {
             "state" -> {
@@ -315,7 +353,7 @@ class VineVMManager @Inject constructor(
             "helper_exit" -> {
                 val reason = f.getOrNull(0).orEmpty()
                 for ((id, flow) in statusFlows) {
-                    if (flow.value in ACTIVE) {
+                    if (flow.value in ACTIVE && isRootless(id) == rootless) {
                         errorFlows.getOrPut(id) { MutableStateFlow(null) }.value = reason
                         setStatus(id, VMStatus.ERROR)
                     }
@@ -371,7 +409,10 @@ class VineVMManager @Inject constructor(
                 context.stopService(Intent(context, VineService::class.java))
                 idleJob = scope.launch {
                     delay(IDLE_SHUTDOWN_MS)
-                    if (activeCount() == 0) helper.shutdown()
+                    if (activeCount() == 0) {
+                        helper.shutdown()
+                        rootlessHelper.shutdown()
+                    }
                 }
             }
         }
@@ -393,7 +434,10 @@ class VineVMManager @Inject constructor(
     }
 
     fun shutdown() {
-        scope.launch { helper.shutdown() }
+        scope.launch {
+            helper.shutdown()
+            rootlessHelper.shutdown()
+        }
     }
 
     fun cleanup() {

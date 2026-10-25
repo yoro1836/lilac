@@ -39,6 +39,7 @@ class AppPreferences @Inject constructor(@ApplicationContext private val context
         val GUEST_RESOLUTION = stringPreferencesKey("guest_resolution")
         val AVOID_CUTOUT = booleanPreferencesKey("avoid_cutout")
         val GUEST_NETWORK = booleanPreferencesKey("guest_network")
+        val GPU_ACCELERATION = booleanPreferencesKey("gpu_acceleration")
     }
 
     companion object {
@@ -95,6 +96,10 @@ class AppPreferences @Inject constructor(@ApplicationContext private val context
         .catchIO()
         .map { it[Keys.GUEST_NETWORK] ?: true }
 
+    val gpuAcceleration: Flow<Boolean> = store.data
+        .catchIO()
+        .map { it[Keys.GPU_ACCELERATION] ?: false }
+
     suspend fun setDynamicColor(value: Boolean) = store.edit { it[Keys.DYNAMIC_COLOR] = value }
 
     suspend fun setKeepScreenOn(value: Boolean) = store.edit { it[Keys.KEEP_SCREEN_ON] = value }
@@ -118,6 +123,8 @@ class AppPreferences @Inject constructor(@ApplicationContext private val context
     suspend fun setAvoidCutout(value: Boolean) = store.edit { it[Keys.AVOID_CUTOUT] = value }
 
     suspend fun setGuestNetwork(value: Boolean) = store.edit { it[Keys.GUEST_NETWORK] = value }
+
+    suspend fun setGpuAcceleration(value: Boolean) = store.edit { it[Keys.GPU_ACCELERATION] = value }
 
     private fun Flow<Preferences>.catchIO() = catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
 }

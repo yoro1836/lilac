@@ -19,7 +19,14 @@ enum Format : uint32_t { RGBA_8888 = 0, BGRA_8888 = 1, RGB_565 = 2, RGBX_8888 = 
 struct Header {
     uint32_t magic, version, width, height, stride, format, data_offset, capacity;
     uint32_t frame_seq, frame_count;
-    uint32_t reserved[6];
+    // Nonzero: the frame is the host GPU resource with this id (a
+    // gfxstream ColorBuffer, gpu_format an Android HAL format), not the
+    // pixels at data_offset
+    uint32_t gpu_resource, gpu_width, gpu_height, gpu_format;
+    // Written by the host: frame_seq of the newest gpu_resource frame on
+    // screen. Older GPU buffers are free to draw into again.
+    uint32_t host_shown_seq;
+    uint32_t reserved;
 };
 static_assert(sizeof(Header) == 64, "Header is part of the guest ABI");
 
@@ -62,6 +69,8 @@ public:
     uint32_t width() const { return header()->width; }
     uint32_t height() const { return header()->height; }
     uint32_t format() const { return header()->format; }
+    uint32_t frame_seq() const { return __atomic_load_n(&header()->frame_seq, __ATOMIC_RELAXED); }
+    uint32_t host_shown_seq() const { return __atomic_load_n(&header()->host_shown_seq, __ATOMIC_ACQUIRE); }
 
     // Publishes one full frame, src_stride in bytes, a reader never sees a half-written frame
     bool present(const void* pixels, uint32_t src_stride) {
@@ -79,6 +88,23 @@ public:
         } else {
             for (uint32_t y = 0; y < h->height; ++y) memcpy(dst + (size_t)y * h->stride, src + (size_t)y * src_stride, row);
         }
+        h->gpu_resource = 0;
+        h->frame_count = h->frame_count + 1;
+        __atomic_store_n(&h->frame_seq, base_seq + 2, __ATOMIC_RELEASE);
+        return true;
+    }
+
+    // Publishes a frame that stays on the host GPU
+    bool present_gpu(uint32_t resource, uint32_t width, uint32_t height, uint32_t format) {
+        if (!base_ || !resource) return false;
+        Header* h = hdr();
+        const uint32_t base_seq = h->frame_seq & ~1u;
+        __atomic_store_n(&h->frame_seq, base_seq + 1, __ATOMIC_RELAXED);
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+        h->gpu_resource = resource;
+        h->gpu_width = width;
+        h->gpu_height = height;
+        h->gpu_format = format;
         h->frame_count = h->frame_count + 1;
         __atomic_store_n(&h->frame_seq, base_seq + 2, __ATOMIC_RELEASE);
         return true;

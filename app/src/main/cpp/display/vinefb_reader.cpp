@@ -34,7 +34,16 @@ bool VineFbReader::open(const std::string& path, std::string* error) {
     }
     base_ = map;
     size_ = (size_t)st.st_size;
+    path_ = path;
+    dev_ = (uint64_t)st.st_dev;
+    ino_ = (uint64_t)st.st_ino;
     return true;
+}
+
+bool VineFbReader::replaced() const {
+    struct stat st{};
+    if (path_.empty() || stat(path_.c_str(), &st) != 0) return false;
+    return !base_ || (uint64_t)st.st_dev != dev_ || (uint64_t)st.st_ino != ino_;
 }
 
 void VineFbReader::close() {
@@ -71,6 +80,9 @@ bool VineFbReader::header(FrameInfo* info) const {
         info->format = (VineFbFormat)h.format;
         info->frame_seq = h.frame_seq;
         info->frame_count = h.frame_count;
+        info->gpu_resource = h.gpu_resource;
+        info->gpu_width = h.gpu_width;
+        info->gpu_height = h.gpu_height;
     }
     return true;
 }

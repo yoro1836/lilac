@@ -1,0 +1,45 @@
+From: tawc
+Origin: own
+
+Defer KumquatGpu construction until the first accepted client.
+
+05-lazy-gpu-init.patch teaches `Kumquat::run` to create the GPU on
+first client accept. This patch moves the renderer configuration out of
+the eager `KumquatBuilder::build()` path so build only binds the socket.
+
+diff --git a/kumquat/server/src/kumquat.rs b/kumquat/server/src/kumquat.rs
+--- a/kumquat/server/src/kumquat.rs
++++ b/kumquat/server/src/kumquat.rs
+@@ -158,6 +158,8 @@ impl KumquatBuilder {
+         let connection_id: u64 = 0;
+         let mut wait_ctx = WaitContext::new()?;
+-        let mut kumquat_gpu_opt: Option<KumquatGpu> = None;
++        let kumquat_gpu_opt: Option<KumquatGpu> = None;
++        let capset_names = self.capset_names_opt.unwrap_or_default();
++        let renderer_features = self.renderer_features_opt.unwrap_or_default();
+         let mut gpu_listener_opt: Option<Listener> = None;
+         let mut connections: Map<u64, KumquatConnection> = Default::default();
+ 
+@@ -166,13 +168,6 @@ impl KumquatBuilder {
+             let path = PathBuf::from(&gpu_socket);
+             let _ = std::fs::remove_file(&path);
+ 
+-            // Should not panic, since main.rs always calls set_capset_names and
+-            // set_renderer_features, even with the empty string.
+-            kumquat_gpu_opt = Some(KumquatGpu::new(
+-                self.capset_names_opt.unwrap(),
+-                self.renderer_features_opt.unwrap(),
+-            )?);
+-
+             let gpu_listener = Listener::bind(path)?;
+             wait_ctx.add(connection_id, gpu_listener.as_borrowed_descriptor())?;
+             connections.insert(connection_id, KumquatConnection::GpuListener);
+@@ -182,6 +177,8 @@ impl KumquatBuilder {
+             connection_id,
+             wait_ctx,
+             kumquat_gpu_opt,
++            capset_names,
++            renderer_features,
+             gpu_listener_opt,
+             connections,
+         })

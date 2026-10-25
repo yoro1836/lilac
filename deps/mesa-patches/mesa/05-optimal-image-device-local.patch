@@ -1,0 +1,42 @@
+From: wayondroid
+Origin: own
+
+Optimal-tiling images: report only device-local, non-host-visible
+memory types when the host lists any. Xclipse lists host-visible types
+for D32S8 images that then fail to bind (VK_ERROR_UNKNOWN), and ANGLE
+picks the first one, so every stencil window surface failed.
+
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+@@ -768,9 +768,27 @@
+         reqs->size = width * height * 4;
+     }
+ #else
+-    // Bypass "unused parameter" checks.
+-    (void)image;
+-    (void)reqs;
++    // Some hosts (Samsung Xclipse) list host-visible types for optimal
++    // images that then fail to bind, and drivers like ANGLE take the
++    // lowest-index device-local type, which is host-visible. Keep such
++    // images in device-local, non-host-visible memory when there is any.
++    auto it = info_VkImage.find(image);
++    if (it == info_VkImage.end()) return;
++    const auto& info = it->second;
++    if (info.createInfo.tiling != VK_IMAGE_TILING_OPTIMAL ||
++        (info.external && info.externalCreateInfo.handleTypes))
++        return;
++    auto dit = info_VkDevice.find(info.device);
++    if (dit == info_VkDevice.end()) return;
++    const auto& memProps = dit->second.memProps;
++    uint32_t local = 0;
++    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
++        VkMemoryPropertyFlags f = memProps.memoryTypes[i].propertyFlags;
++        if ((reqs->memoryTypeBits & (1u << i)) && (f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
++            !(f & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_PROTECTED_BIT)))
++            local |= 1u << i;
++    }
++    if (local) reqs->memoryTypeBits = local;
+ #endif
+ }
+ 

@@ -51,7 +51,7 @@ class VineService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             return NotificationCompat.Builder(context, CHANNEL_VM_RUNNING)
-                .setContentTitle("VineOS")
+                .setContentTitle("Wayondroid")
                 .setContentText(contentText)
                 .setSmallIcon(android.R.drawable.ic_menu_info_details)
                 .setContentIntent(openAppIntent)

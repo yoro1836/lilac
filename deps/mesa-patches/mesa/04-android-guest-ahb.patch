@@ -1,0 +1,185 @@
+From: wayondroid
+Origin: own
+
+gfxstream-vk as an Android 13 HAL from meson: build the AHB and goldfish
+gralloc sources (minigbm only where its header exists), link stubs for
+the AHardwareBuffer calls they make, and answer the Android loader's
+VkPhysicalDevicePresentationPropertiesANDROID in the guest; the host
+decoder aborts on it.
+
+diff --git a/src/android_stub/nativewindow_stub.cpp b/src/android_stub/nativewindow_stub.cpp
+index 9276a9c..e4c581a 100644
+--- a/src/android_stub/nativewindow_stub.cpp
++++ b/src/android_stub/nativewindow_stub.cpp
+@@ -43,6 +43,19 @@ AHardwareBuffer_getNativeHandle(const AHardwareBuffer *buffer)
+    return NULL;
+ }
+ 
++int
++AHardwareBuffer_lock(AHardwareBuffer *buffer, uint64_t usage, int32_t fence,
++                     const ARect *rect, void **outVirtualAddress)
++{
++   return 0;
++}
++
++int
++AHardwareBuffer_unlock(AHardwareBuffer *buffer, int32_t *fence)
++{
++   return 0;
++}
++
+ void
+ ANativeWindow_acquire(ANativeWindow *window)
+ {
+diff --git a/src/gfxstream/codegen/scripts/cereal/encoder.py b/src/gfxstream/codegen/scripts/cereal/encoder.py
+index 452ec56..974a82c 100644
+--- a/src/gfxstream/codegen/scripts/cereal/encoder.py
++++ b/src/gfxstream/codegen/scripts/cereal/encoder.py
+@@ -73,7 +73,6 @@ ENCODER_CUSTOM_RESOURCE_POSTPROCESS = [
+     "vkCreateDevice",
+     "vkMapMemoryIntoAddressSpaceGOOGLE",
+     "vkGetPhysicalDeviceFeatures2",
+-    "vkGetPhysicalDeviceProperties2",
+     "vkCreateDescriptorUpdateTemplate",
+     "vkGetPhysicalDeviceExternalSemaphoreProperties",
+ ]
+diff --git a/src/gfxstream/codegen/scripts/cereal/functable.py b/src/gfxstream/codegen/scripts/cereal/functable.py
+index 2979db8..a69eae2 100644
+--- a/src/gfxstream/codegen/scripts/cereal/functable.py
++++ b/src/gfxstream/codegen/scripts/cereal/functable.py
+@@ -44,6 +44,7 @@ RESOURCE_TRACKER_ENTRIES = [
+     "vkCreateSamplerYcbcrConversion",
+     "vkDestroySamplerYcbcrConversion",
+     "vkUpdateDescriptorSetWithTemplate",
++    "vkGetPhysicalDeviceProperties2",
+     "vkGetPhysicalDeviceFormatProperties2",
+     "vkGetPhysicalDeviceImageFormatProperties2",
+     "vkBeginCommandBuffer",
+diff --git a/src/gfxstream/guest/android/GfxStreamGralloc.cpp b/src/gfxstream/guest/android/GfxStreamGralloc.cpp
+index 1a70a9d..515c730 100644
+--- a/src/gfxstream/guest/android/GfxStreamGralloc.cpp
++++ b/src/gfxstream/guest/android/GfxStreamGralloc.cpp
+@@ -11,17 +11,25 @@
+ #include <string>
+ 
+ #include "GrallocGoldfish.h"
++#if __has_include(<cros_gralloc/cros_gralloc_handle.h>)
++#define GFXSTREAM_HAS_MINIGBM 1
+ #include "GrallocMinigbm.h"
++#endif
+ #include "android-base/properties.h"
+ 
+ namespace gfxstream {
+ 
+ Gralloc* createPlatformGralloc(int32_t descriptor) {
+     const std::string value = android::base::GetProperty("ro.hardware.gralloc", "");
++#ifdef GFXSTREAM_HAS_MINIGBM
+     if (value == "minigbm") {
+         auto gralloc = new MinigbmGralloc(descriptor);
+         return gralloc;
+     }
++#else
++    (void)value;
++    (void)descriptor;
++#endif
+     return new GoldfishGralloc();
+ }
+ 
+diff --git a/src/gfxstream/guest/android/GrallocGoldfish.cpp b/src/gfxstream/guest/android/GrallocGoldfish.cpp
+index 44a2924..8135431 100644
+--- a/src/gfxstream/guest/android/GrallocGoldfish.cpp
++++ b/src/gfxstream/guest/android/GrallocGoldfish.cpp
+@@ -8,6 +8,10 @@
+ #include <gralloc_cb_bp.h>
+ #include <vndk/hardware_buffer.h>
+ 
++// Not in Mesa's android-stub headers; libnativewindow has it from API 31
++extern "C" int AHardwareBuffer_getId(const AHardwareBuffer* buffer, uint64_t* outId)
++    __attribute__((weak));
++
+ namespace gfxstream {
+ 
+ GrallocType GoldfishGralloc::getGrallocType() { return GRALLOC_TYPE_GOLDFISH; }
+@@ -103,7 +107,9 @@ size_t GoldfishGralloc::getAllocatedSize(const AHardwareBuffer* ahb) {
+ 
+ int GoldfishGralloc::getId(const AHardwareBuffer* ahb, uint64_t* id) {
+ #if ANDROID_API_LEVEL >= 31
+-    return AHardwareBuffer_getId(ahb, id);
++    if (AHardwareBuffer_getId) return AHardwareBuffer_getId(ahb, id);
++    *id = 0;
++    return 0;
+ #else
+     (void)ahb;
+     *id = 0;
+diff --git a/src/gfxstream/guest/meson.build b/src/gfxstream/guest/meson.build
+index 5e48efa..0fdd55e 100644
+--- a/src/gfxstream/guest/meson.build
++++ b/src/gfxstream/guest/meson.build
+@@ -30,6 +30,17 @@ gfxstream_guest_args += '-DVK_GFXSTREAM_STRUCTURE_TYPE_EXT'
+ 
+ inc_vulkan_headers = include_directories('../../../include/vulkan')
+ inc_vulkan_enc = include_directories('vulkan_enc')
++inc_gfxstream_android = include_directories('android/include')
++
++# AHardwareBuffer and gralloc support for Android builds
++files_gfxstream_android = []
++if with_platform_android
++  files_gfxstream_android = files(
++    'android/GfxStreamGralloc.cpp',
++    'android/GrallocGoldfish.cpp',
++    'vulkan_enc/AndroidHardwareBuffer.cpp',
++  )
++endif
+ 
+ #================#
+ # Subdirectories #
+diff --git a/src/gfxstream/guest/vulkan/meson.build b/src/gfxstream/guest/vulkan/meson.build
+index b00d5e3..e524f5a 100644
+--- a/src/gfxstream/guest/vulkan/meson.build
++++ b/src/gfxstream/guest/vulkan/meson.build
+@@ -28,14 +28,15 @@ endif
+ 
+ lib_vulkan_gfxstream = shared_library(
+    'vulkan_gfxstream',
+-   files_lib_vulkan_gfxstream + files_lib_vulkan_enc + gfxstream_vk_entrypoints +
++   files_lib_vulkan_gfxstream + files_lib_vulkan_enc + files_gfxstream_android + gfxstream_vk_entrypoints +
+    gfxstream_guest_vk_autogen + vulkan_gfxstream_h,
+    cpp_args: gfxstream_guest_args + gfxstream_vk_wsi_args,
+    include_directories: [inc_vulkan_headers, inc_guest_iostream,
+                          inc_vulkan_enc, inc_platform_virtgpu,
+                          inc_gfxstream_vk_stubs, inc_goldfish_address_space,
+                          inc_include, inc_src, inc_aemu,
+-                         inc_platform_virtgpu, inc_connection_manager],
++                         inc_platform_virtgpu, inc_connection_manager,
++                         inc_gfxstream_android],
+    link_with: [libgfxstream_vk_stubs, libvulkan_wsi, libplatform_virtgpu,
+                libconnection_manager, libaemu],
+    link_args: [vulkan_icd_link_args, ld_args_bsymbolic, ld_args_gc_sections],
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+index 4702897..f8cc404 100644
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+@@ -2183,6 +2183,23 @@ void ResourceTracker::on_vkGetPhysicalDeviceProperties2(void* context,
+     if (!pProperties) {
+         return;
+     }
++    // Android's loader asks for VkPhysicalDevicePresentationPropertiesANDROID,
++    // which the host does not decode: answer it here, without the host
++    VkBaseOutStructure* presentation = nullptr;
++    for (VkBaseOutStructure* p = (VkBaseOutStructure*)pProperties; p->pNext; p = p->pNext) {
++        if (p->pNext->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID) {
++            presentation = p->pNext;
++            p->pNext = presentation->pNext;
++            presentation->pNext = (VkBaseOutStructure*)pProperties->pNext;
++            break;
++        }
++    }
++    VkEncoder* enc = (VkEncoder*)context;
++    enc->vkGetPhysicalDeviceProperties2(physicalDevice, pProperties, true /* do lock */);
++    if (presentation) {
++        ((VkPhysicalDevicePresentationPropertiesANDROID*)presentation)->sharedImage = VK_FALSE;
++        pProperties->pNext = presentation;
++    }
+ #ifdef LINUX_GUEST_BUILD
+     if (VK_PHYSICAL_DEVICE_TYPE_CPU == pProperties->properties.deviceType) {
+         /* For Linux guest: Even if host driver reports DEVICE_TYPE_CPU,

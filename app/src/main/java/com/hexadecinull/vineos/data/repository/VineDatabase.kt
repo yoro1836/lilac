@@ -10,6 +10,8 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.hexadecinull.vineos.data.models.VMInstance
 import com.hexadecinull.vineos.data.models.VMStatus
 import kotlinx.coroutines.flow.Flow
@@ -58,7 +60,7 @@ interface VMInstanceDao {
 
 @Database(
     entities = [VMInstance::class],
-    version = 1,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(VineConverters::class)
@@ -67,5 +69,30 @@ abstract class VineDatabase : RoomDatabase() {
 
     companion object {
         const val DATABASE_NAME = "vineos.db"
+
+        // Per-instance display settings
+        val MIGRATION_1_3 = object : Migration(1, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE vm_instances ADD COLUMN refreshHz INTEGER NOT NULL DEFAULT 60")
+                db.execSQL("ALTER TABLE vm_instances ADD COLUMN resolution TEXT")
+            }
+        }
+
+        // Version 2 (dev builds only) also had a vsync column
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE vm_instances_new (id TEXT NOT NULL, name TEXT NOT NULL, romId TEXT NOT NULL, " +
+                        "romVersion TEXT NOT NULL, storagePath TEXT NOT NULL, status TEXT NOT NULL, createdAt INTEGER NOT NULL, " +
+                        "lastUsedAt INTEGER NOT NULL, ramMb INTEGER NOT NULL, cpuCores INTEGER NOT NULL, storageMb INTEGER NOT NULL, " +
+                        "androidVersionDisplay TEXT NOT NULL, isRooted INTEGER NOT NULL, iconEmoji TEXT NOT NULL, " +
+                        "refreshHz INTEGER NOT NULL DEFAULT 60, resolution TEXT, PRIMARY KEY(id))",
+                )
+                val columns = "id, name, romId, romVersion, storagePath, status, createdAt, lastUsedAt, ramMb, cpuCores, storageMb, androidVersionDisplay, isRooted, iconEmoji, refreshHz, resolution"
+                db.execSQL("INSERT INTO vm_instances_new ($columns) SELECT $columns FROM vm_instances")
+                db.execSQL("DROP TABLE vm_instances")
+                db.execSQL("ALTER TABLE vm_instances_new RENAME TO vm_instances")
+            }
+        }
     }
 }

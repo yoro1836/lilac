@@ -21,7 +21,7 @@ class AboutViewModel @Inject constructor(@ApplicationContext private val context
     val sections: List<AboutInfoSection> = listOf(appSection(), hostOsSection(), deviceSection())
 
     private fun appSection() = AboutInfoSection(
-        title = "VineOS",
+        title = "Wayondroid",
         items = listOf(
             AboutInfoItem("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"),
             AboutInfoItem("Application ID", BuildConfig.APPLICATION_ID),

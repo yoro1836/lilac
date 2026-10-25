@@ -22,7 +22,7 @@ class VineApplication : Application() {
                     "Running VMs",
                     NotificationManager.IMPORTANCE_LOW,
                 ).apply {
-                    description = "Shown while a VineOS virtual machine is active"
+                    description = "Shown while a Wayondroid virtual machine is active"
                     setShowBadge(false)
                 },
             )

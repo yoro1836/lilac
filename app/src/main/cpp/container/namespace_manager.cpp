@@ -728,7 +728,7 @@ bool Container::spawn() {
     fds.go_r = p[0]; fds.go_w = p[1];
     fds.log = open(config_.boot_log_path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
     if (fds.log >= 0) {
-        const std::string banner = "=== VineOS start " + std::to_string((long)time(nullptr)) + " instance " + config_.instance_id + " ===\n";
+        const std::string banner = "=== Wayondroid start " + std::to_string((long)time(nullptr)) + " instance " + config_.instance_id + " ===\n";
         write_all(fds.log, banner.data(), banner.size());
         if (config_.owner_uid >= 0) fchown(fds.log, (uid_t)config_.owner_uid, (gid_t)config_.owner_gid);
     }

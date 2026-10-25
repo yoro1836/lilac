@@ -3,7 +3,7 @@ package com.hexadecinull.vineos.shizuku
 import android.content.Context
 import androidx.annotation.Keep
 
-// Instantiated by Shizuku's server inside the shell (ADB) or root process, not VineOS's own app process; both constructors and System.loadLibrary must stay reachable after ProGuard, hence @Keep
+// Instantiated by Shizuku's server inside the shell (ADB) or root process, not Wayondroid's own app process; both constructors and System.loadLibrary must stay reachable after ProGuard, hence @Keep
 class VineShizukuService : IVineShizukuService.Stub {
     constructor() : super()
 

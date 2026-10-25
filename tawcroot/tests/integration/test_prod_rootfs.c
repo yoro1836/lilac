@@ -1,0 +1,617 @@
+/* Integration tests for production rootfs-mode CLI:
+ *
+ *   tawcroot -r ROOTFS [-b SRC:DST]... -- CMD [ARGS...]
+ *
+ * This is the full phase-2d/2f path: parse argv, open the rootfs, build
+ * the bind table, install handler+filter, translate the guest cmd path,
+ * and manual-load. The guest's syscalls trap into our handler and route
+ * through tawcroot_path_translate.
+ *
+ * Coverage today:
+ *   - static binary inside the rootfs runs and exits cleanly
+ *   - argv0 visible to the guest is the GUEST path (not the host path)
+ *   - bind dst routes the guest open to the bind src
+ *   - missing -- separator and missing -r both exit with usage code 2
+ *   - non-existent guest under -r returns the loader open-failed code
+ */
+
+#include <cleat/test.h>
+#include <cleat/subproc.h>
+#include <stc/cstr.h>
+
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include "rootfs_helpers.h"
+
+#ifndef PATH_MAX
+# define PATH_MAX 4096
+#endif
+
+#ifndef TAWCROOT_PROD_BIN
+# error "TAWCROOT_PROD_BIN must be defined by the build"
+#endif
+#ifndef TAWCROOT_STATIC_EXIT42_BIN
+# error "TAWCROOT_STATIC_EXIT42_BIN must be defined"
+#endif
+#ifndef TAWCROOT_STATIC_ARGC_RANDOM_BIN
+# error "TAWCROOT_STATIC_ARGC_RANDOM_BIN must be defined"
+#endif
+#ifndef TAWCROOT_STATIC_EXECVE_EXIT42_BIN
+# error "TAWCROOT_STATIC_EXECVE_EXIT42_BIN must be defined"
+#endif
+#ifndef TAWCROOT_STATIC_DROP_IDS_EXECVE_BIN
+# error "TAWCROOT_STATIC_DROP_IDS_EXECVE_BIN must be defined"
+#endif
+#ifndef TAWCROOT_STATIC_CHECK_IDS_EXIT42_BIN
+# error "TAWCROOT_STATIC_CHECK_IDS_EXIT42_BIN must be defined"
+#endif
+#ifndef TAWCROOT_STATIC_OPEN_RDONLY_ARGV1_BIN
+# error "TAWCROOT_STATIC_OPEN_RDONLY_ARGV1_BIN must be defined"
+#endif
+
+#ifndef TAWCROOT_TEST_TMPDIR
+# define TAWCROOT_TEST_TMPDIR "/tmp"
+#endif
+
+#define FAKE_ROOTFS  TAWCROOT_TEST_TMPDIR "/tawcroot-test-rootfs-prod"
+#define FAKE_BINDSRC TAWCROOT_TEST_TMPDIR "/tawcroot-test-rootfs-prod-bindsrc"
+
+/* Build a minimal fake rootfs:
+ *   <root>/bin/static_exit42        copy of the static fixture
+ *   <root>/bin/static_argc_random   copy of the argv-checking fixture
+ *   <root>/etc/probe                "from-rootfs"
+ */
+static bool build_rootfs(void)
+{
+	char p[PATH_MAX];
+
+	if (!rh_mkdir_p(FAKE_ROOTFS, 0755)) return false;
+	snprintf(p, sizeof p, "%s/bin", FAKE_ROOTFS);
+	if (!rh_mkdir_p(p, 0755)) return false;
+	snprintf(p, sizeof p, "%s/etc", FAKE_ROOTFS);
+	if (!rh_mkdir_p(p, 0755)) return false;
+
+	snprintf(p, sizeof p, "%s/bin/static_exit42", FAKE_ROOTFS);
+	if (!rh_copy_file(TAWCROOT_STATIC_EXIT42_BIN, p, 0755)) return false;
+
+	snprintf(p, sizeof p, "%s/bin/static_argc_random", FAKE_ROOTFS);
+	if (!rh_copy_file(TAWCROOT_STATIC_ARGC_RANDOM_BIN, p, 0755)) return false;
+
+	snprintf(p, sizeof p, "%s/bin/static_execve_exit42", FAKE_ROOTFS);
+	if (!rh_copy_file(TAWCROOT_STATIC_EXECVE_EXIT42_BIN, p, 0755)) return false;
+
+	snprintf(p, sizeof p, "%s/bin/static_execve_proc_self_exe", FAKE_ROOTFS);
+	if (!rh_copy_file(TAWCROOT_STATIC_EXECVE_PROC_SELF_EXE_BIN, p, 0755)) return false;
+
+	snprintf(p, sizeof p, "%s/bin/static_drop_ids_execve", FAKE_ROOTFS);
+	if (!rh_copy_file(TAWCROOT_STATIC_DROP_IDS_EXECVE_BIN, p, 0755)) return false;
+
+	snprintf(p, sizeof p, "%s/bin/static_check_ids_exit42", FAKE_ROOTFS);
+	if (!rh_copy_file(TAWCROOT_STATIC_CHECK_IDS_EXIT42_BIN, p, 0755)) return false;
+
+	snprintf(p, sizeof p, "%s/etc/probe", FAKE_ROOTFS);
+	if (!rh_write_text(p, "from-rootfs\n")) return false;
+
+	return true;
+}
+
+static bool build_bindsrc(void)
+{
+	if (!rh_mkdir_p(FAKE_BINDSRC, 0755)) return false;
+	char p[PATH_MAX];
+	snprintf(p, sizeof p, "%s/static_exit42", FAKE_BINDSRC);
+	return rh_copy_file(TAWCROOT_STATIC_EXIT42_BIN, p, 0755);
+}
+
+/* Run TAWCROOT_PROD_BIN with the supplied argv and return the exit
+ * status (or negative on signal). Caller passes a NULL-terminated
+ * extra_args list, identical shape to test_prod_exec.c::run. */
+static int run_with(const char *const *extra_args)
+{
+	VecStr cmd = c_init(vec_str, {TAWCROOT_PROD_BIN});
+	for (const char *const *p = extra_args; *p; p++) {
+		vec_str_push(&cmd, *p);
+	}
+	int rc = -1;
+	FailableResult res = run_subproc((SubprocArgs){
+		.vec_cmd = cmd, .exit_code = &rc
+	});
+	failable_result_drop(&res);
+	return rc;
+}
+
+test(prod_rootfs_static_exit42)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--", "/bin/static_exit42", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+test(prod_rootfs_bind_overrides_rootfs)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	rh_rmrf(FAKE_BINDSRC);
+	test_true(build_rootfs());
+	test_true(build_bindsrc());
+
+	/* Bind <bindsrc> at /opt; running /opt/static_exit42 should resolve
+	 * to <bindsrc>/static_exit42 (which the harness placed there) and
+	 * exit 42. */
+	const char *args[] = {
+		"-r", FAKE_ROOTFS,
+		"-b", FAKE_BINDSRC ":opt",
+		"--", "/opt/static_exit42", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	rh_rmrf(FAKE_ROOTFS);
+	rh_rmrf(FAKE_BINDSRC);
+}
+
+test(prod_rootfs_no_args_prints_usage)
+{
+	/* `tawcroot` with no argv tail at all: argc < 2 → usage(2). */
+	const char *args[] = { NULL };
+	test_int_eq(run_with(args), 2);
+}
+
+test(prod_rootfs_missing_double_dash_is_usage)
+{
+	/* No `--` separator means we never enter the "command + args"
+	 * region; tawcroot exits with usage code 2. */
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "/bin/static_exit42", NULL
+	};
+	test_int_eq(run_with(args), 2);
+}
+
+test(prod_rootfs_missing_r_is_usage)
+{
+	/* `-- CMD` with no `-r ROOTFS` falls through to the unknown-flag
+	 * branch and exits with usage code 2. */
+	const char *args[] = {
+		"--", "/bin/static_exit42", NULL
+	};
+	test_int_eq(run_with(args), 2);
+}
+
+test(prod_rootfs_relative_rootfs_is_usage)
+{
+	/* prod_rootfs_init insists -r be absolute (review B4). */
+	const char *args[] = {
+		"-r", "tmp/relative", "--", "/bin/x", NULL
+	};
+	test_int_eq(run_with(args), 80);
+}
+
+test(prod_rootfs_nonexistent_guest_returns_loader_code)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--", "/this/does/not/exist", NULL
+	};
+	/* loader_exec.h: 60 = open guest failed. */
+	test_int_eq(run_with(args), 60);
+
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* Phase 2g: a guest does execve() and the new process runs.
+ *
+ *   1. tawcroot starts in -r mode, installs handler+filter, manual-loads
+ *      /bin/static_execve_exit42.
+ *   2. The fixture issues execve("/bin/static_exit42"). Filter traps,
+ *      handler dispatches to the exec handler's prepare/commit pair.
+ *   3. prepare translates the path against the rootfs, probes that
+ *      it's openable, builds an exec_state with rootfs + bind specs +
+ *      guest_exe, and writes the memfd; commit execveats
+ *      /proc/self/exe with --exec-child <fd>.
+ *   4. The new tawcroot incarnation reads exec_state, re-establishes
+ *      the rootfs view (open rootfs fd, bind table, handler reinstall),
+ *      then manual-loads /bin/static_exit42 inside the rootfs.
+ *   5. /bin/static_exit42 runs and exits 42.
+ *
+ * If any step fails the fixture or the loader exits with a code outside
+ * the [42, 42] range. The encoding 90+errno from the fixture and 60..89
+ * from the loader is disjoint from 42 so the test pinpoints which
+ * link in the chain broke.
+ */
+test(prod_rootfs_old_android_host_policy)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+	test_true(rh_copy_file(TAWCROOT_STATIC_HOST_POLICY_BIN,
+		FAKE_ROOTFS "/bin/static_host_policy", 0755));
+	VecStr cmd = c_init(vec_str, {TAWCROOT_ANDROID_FILTER_WRAP,
+		"--old-app-policy", "--", TAWCROOT_PROD_BIN,
+		"-r", FAKE_ROOTFS, "--", "/bin/static_host_policy"});
+	int rc = -1;
+	FailableResult res = run_subproc((SubprocArgs){
+		.vec_cmd = cmd, .exit_code = &rc
+	});
+	failable_result_drop(&res);
+	test_int_eq(rc, 42);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+#ifndef TAWCROOT_STATIC_SVC_REGS_PRESERVED_BIN
+# error "TAWCROOT_STATIC_SVC_REGS_PRESERVED_BIN must be defined"
+#endif
+
+/* A trapped syscall repeated from one site must preserve every register
+ * the kernel ABI does, both while it goes through SIGSYS and after a
+ * fastpath build rewrote the site (src/fastpath.c). */
+test(prod_rootfs_trapped_svc_preserves_registers)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+	test_true(rh_copy_file(TAWCROOT_STATIC_SVC_REGS_PRESERVED_BIN,
+		FAKE_ROOTFS "/bin/static_svc_regs_preserved", 0755));
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--", "/bin/static_svc_regs_preserved", NULL
+	};
+	test_int_eq(run_with(args), 42);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+test(prod_rootfs_guest_does_execve)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--", "/bin/static_execve_exit42", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* execve("/proc/self/exe") must re-exec the *guest* binary, not the
+ * kernel-level link target (libtawcroot.so — mapping that over the
+ * running incarnation is LOADER_FAIL 68). This is busybox's
+ * standalone-shell applet-launch pattern (Debian's config), which the
+ * packages bootstrap flavor runs debootstrap under; the exec handler
+ * substitutes the stashed guest exe path, mirroring readlinkat's
+ * /proc/self/exe synthesis. The fixture execs itself with an extra
+ * arg and exits 42 from the re-exec'd image. */
+test(prod_rootfs_execve_proc_self_exe_is_self)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--", "/bin/static_execve_proc_self_exe", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* Virtual identity survives execve: the fixture drops to uid/gid 994
+ * with groups {994} (sshd's preauth shape), asserts the drop is
+ * irreversible (setuid(0) EPERMs), then execve's
+ * /bin/static_check_ids_exit42 which asserts the getters — including
+ * getgroups — still report 994 in the post-exec image. Exit-code key:
+ * 91..95 = drop-side failure, 43..47 = post-exec getter regression,
+ * 42 = pass. */
+test(prod_rootfs_identity_survives_execve)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--", "/bin/static_drop_ids_execve", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+test(prod_rootfs_dotdot_clamps_at_root)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	/* /../../../bin/static_exit42 must clamp at the rootfs root and
+	 * resolve to <rootfs>/bin/static_exit42 (which exists), exit 42.
+	 * Without clamping this would resolve to host /bin/static_exit42,
+	 * which doesn't exist on most systems; either way the assertion
+	 * is "clamps inside the view, not host fs". */
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--",
+		"/../../../bin/static_exit42", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* Cross-bind absolute symlink: a symlink that lives in bind A whose
+ * absolute target is a real host path must follow through to that
+ * host file. This is the Pixel-10-Pro-Fold libhybris regression:
+ * `/system/lib64/libc.so → /apex/com.android.runtime/lib64/bionic/libc.so`
+ * with same-path binds for both `/system` and `/apex`. With openat2 +
+ * RESOLVE_IN_ROOT the kernel re-roots the absolute target at bind A's
+ * src_fd looking for `<bindA>/<absolute>` and returns ENOENT — older
+ * kernels without openat2 (e.g. Pixel 4a's 4.14) fall through to plain
+ * openat, which chases the absolute target via the host root and
+ * works.
+ *
+ * Same-path binds (this test) match Android's actual /system→/system,
+ * /apex→/apex layout. A companion test
+ * (prod_rootfs_cross_bind_abs_symlink_different_paths) verifies that
+ * the contract isn't "src must equal dst" — it's "target must be a
+ * real host path".
+ *
+ * Layout:
+ *   <bind_a>/link.txt → <bind_b>/target.txt   (absolute, real host path)
+ *   <bind_b>/target.txt                       (real file)
+ *   tawcroot args: -b <bind_a>:<bind_a> -b <bind_b>:<bind_b>
+ *
+ * The fixture opens its argv[1] read-only and exits 0 on success / 201
+ * on open failure. We launch it as `/bin/static_open_rdonly_argv1
+ * <bind_a>/link.txt` so the symlink chase happens inside the guest's
+ * openat, which is the broken code path. Pre-bug: 201. Post-fix: 0.
+ */
+test(prod_rootfs_cross_bind_abs_symlink)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	char bind_a[PATH_MAX];
+	char bind_b[PATH_MAX];
+	snprintf(bind_a, sizeof bind_a,
+	         TAWCROOT_TEST_TMPDIR "/tawcroot-test-prod-bind-a");
+	snprintf(bind_b, sizeof bind_b,
+	         TAWCROOT_TEST_TMPDIR "/tawcroot-test-prod-bind-b");
+	rh_rmrf(bind_a);
+	rh_rmrf(bind_b);
+	test_true(rh_mkdir_p(bind_a, 0755));
+	test_true(rh_mkdir_p(bind_b, 0755));
+
+	/* The host fixture binary lives in <FAKE_ROOTFS>/bin/, copied by
+	 * build_rootfs above as /bin/static_open_rdonly_argv1. */
+	char fixture[PATH_MAX];
+	snprintf(fixture, sizeof fixture,
+	         "%s/bin/static_open_rdonly_argv1", FAKE_ROOTFS);
+	test_true(rh_copy_file(TAWCROOT_STATIC_OPEN_RDONLY_ARGV1_BIN,
+	                       fixture, 0755));
+
+	char target[PATH_MAX];
+	snprintf(target, sizeof target, "%s/target.txt", bind_b);
+	test_true(rh_write_text(target, "ok\n"));
+
+	char link[PATH_MAX];
+	snprintf(link, sizeof link, "%s/link.txt", bind_a);
+	test_true(symlink(target, link) == 0);
+
+	/* Same-path binds (src == dst), matching Android's /system→/system
+	 * and /apex→/apex layout. */
+	char ba_spec[PATH_MAX];
+	char bb_spec[PATH_MAX];
+	snprintf(ba_spec, sizeof ba_spec, "%s:%s", bind_a, bind_a);
+	snprintf(bb_spec, sizeof bb_spec, "%s:%s", bind_b, bind_b);
+
+	char guest_link[PATH_MAX];
+	snprintf(guest_link, sizeof guest_link, "%s/link.txt", bind_a);
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS,
+		"-b", ba_spec,
+		"-b", bb_spec,
+		"--", "/bin/static_open_rdonly_argv1", guest_link, NULL
+	};
+	test_int_eq(run_with(args), 0);
+
+	rh_rmrf(bind_a);
+	rh_rmrf(bind_b);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* Different-path binds replace storage, not the guest symlink namespace.
+ * Absolute links resolve against guest paths, never unbound host paths. */
+test(prod_rootfs_cross_bind_abs_symlink_different_paths)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	char bind_a[PATH_MAX];
+	char bind_b[PATH_MAX];
+	snprintf(bind_a, sizeof bind_a,
+	         TAWCROOT_TEST_TMPDIR "/tawcroot-test-prod-bind-a-diff");
+	snprintf(bind_b, sizeof bind_b,
+	         TAWCROOT_TEST_TMPDIR "/tawcroot-test-prod-bind-b-diff");
+	rh_rmrf(bind_a);
+	rh_rmrf(bind_b);
+	test_true(rh_mkdir_p(bind_a, 0755));
+	test_true(rh_mkdir_p(bind_b, 0755));
+
+	char fixture[PATH_MAX];
+	snprintf(fixture, sizeof fixture,
+	         "%s/bin/static_open_rdonly_argv1", FAKE_ROOTFS);
+	test_true(rh_copy_file(TAWCROOT_STATIC_OPEN_RDONLY_ARGV1_BIN,
+	                       fixture, 0755));
+
+	char target[PATH_MAX];
+	snprintf(target, sizeof target, "%s/target.txt", bind_b);
+	test_true(rh_write_text(target, "ok\n"));
+
+	char link[PATH_MAX];
+	snprintf(link, sizeof link, "%s/link.txt", bind_a);
+	test_true(symlink(target, link) == 0);
+
+	/* The host-path link above must fail; then verify a guest-path link. */
+	char ba_spec[PATH_MAX];
+	char bb_spec[PATH_MAX];
+	snprintf(ba_spec, sizeof ba_spec, "%s:/dst_a", bind_a);
+	snprintf(bb_spec, sizeof bb_spec, "%s:/dst_b", bind_b);
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS,
+		"-b", ba_spec,
+		"-b", bb_spec,
+		"--", "/bin/static_open_rdonly_argv1", "/dst_a/link.txt", NULL
+	};
+	test_int_eq(run_with(args), 201);
+	test_true(unlink(link) == 0);
+	test_true(symlink("/dst_b/target.txt", link) == 0);
+	test_int_eq(run_with(args), 0);
+
+	rh_rmrf(bind_a);
+	rh_rmrf(bind_b);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* ----- read-only binds (-b SRC:DST:ro) ------------------------------ */
+
+/* Direct write into an RO bind: the guest opens
+ * O_WRONLY|O_CREAT|O_TRUNC on a path under the RO dst and must see
+ * EROFS (fixture exits 42 on exactly that errno; 202 flags the
+ * write-through bug, 203 a wrong errno). */
+test(prod_rootfs_ro_bind_write_is_erofs)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	rh_rmrf(FAKE_BINDSRC);
+	test_true(build_rootfs());
+	test_true(build_bindsrc());
+
+	char fixture[PATH_MAX];
+	snprintf(fixture, sizeof fixture,
+	         "%s/bin/static_expect_erofs_argv1", FAKE_ROOTFS);
+	test_true(rh_copy_file(TAWCROOT_STATIC_EXPECT_EROFS_ARGV1_BIN,
+	                       fixture, 0755));
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS,
+		"-b", FAKE_BINDSRC ":opt:ro",
+		"--", "/bin/static_expect_erofs_argv1", "/opt/marker", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	/* Nothing may have been created host-side. */
+	char marker[PATH_MAX];
+	snprintf(marker, sizeof marker, "%s/marker", FAKE_BINDSRC);
+	test_true(access(marker, F_OK) != 0);
+
+	rh_rmrf(FAKE_ROOTFS);
+	rh_rmrf(FAKE_BINDSRC);
+}
+
+/* Reads (including exec) from an RO bind keep working: run a binary
+ * THAT LIVES in the RO bind. */
+test(prod_rootfs_ro_bind_exec_still_works)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	rh_rmrf(FAKE_BINDSRC);
+	test_true(build_rootfs());
+	test_true(build_bindsrc());  /* places static_exit42 in the src */
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS,
+		"-b", FAKE_BINDSRC ":opt:ro",
+		"--", "/opt/static_exit42", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	rh_rmrf(FAKE_ROOTFS);
+	rh_rmrf(FAKE_BINDSRC);
+}
+
+/* The RO flag survives a guest execve (exec_state v6 bind_ro ferry):
+ * static_fork_exec_argv1 forks + execve's the EROFS fixture, which
+ * runs in the RE-EXEC'D tawcroot incarnation — if the ferry drops the
+ * flag, the write goes through and the fixture exits 202. */
+test(prod_rootfs_ro_bind_survives_execve)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	rh_rmrf(FAKE_BINDSRC);
+	test_true(build_rootfs());
+	test_true(build_bindsrc());
+
+	char p[PATH_MAX];
+	snprintf(p, sizeof p, "%s/bin/static_fork_exec_argv1", FAKE_ROOTFS);
+	test_true(rh_copy_file(TAWCROOT_STATIC_FORK_EXEC_ARGV1_BIN, p, 0755));
+	snprintf(p, sizeof p, "%s/bin/static_expect_erofs_argv1", FAKE_ROOTFS);
+	test_true(rh_copy_file(TAWCROOT_STATIC_EXPECT_EROFS_ARGV1_BIN,
+	                       p, 0755));
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS,
+		"-b", FAKE_BINDSRC ":opt:ro",
+		"--", "/bin/static_fork_exec_argv1",
+		"/bin/static_expect_erofs_argv1", "/opt/marker", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	rh_rmrf(FAKE_ROOTFS);
+	rh_rmrf(FAKE_BINDSRC);
+}
+
+/* Lazy CAP_DAC_OVERRIDE, exec edition. Real root execs a `--x--x--x`
+ * binary fine — the kernel's own override covers the loader's read.
+ * tawcroot's loader has to open the file O_RDONLY as the app uid, so a
+ * 4111-shaped binary was EACCES before the rescue. Two opens have to
+ * work: handle_execve's probe (dispatch wrapper) and the --exec-child
+ * loader's re-open by path (tawcroot_rescue_open_in_view). The fixture
+ * forks, execve's argv[1], and forwards its exit code.
+ *
+ * Vacuous under real uid 0 (rooted adbd), where the open never fails —
+ * the other environments carry it. */
+test(prod_rootfs_guest_execs_exec_only_binary)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	char p[PATH_MAX];
+	snprintf(p, sizeof p, "%s/bin/static_fork_exec_argv1", FAKE_ROOTFS);
+	test_true(rh_copy_file(TAWCROOT_STATIC_FORK_EXEC_ARGV1_BIN, p, 0755));
+	snprintf(p, sizeof p, "%s/bin/exec_only_exit42", FAKE_ROOTFS);
+	test_true(rh_copy_file(TAWCROOT_STATIC_EXIT42_BIN, p, 0111));
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--", "/bin/static_fork_exec_argv1",
+		"/bin/exec_only_exit42", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	/* The guest's mode is unchanged: widen and restore, not widen. */
+	struct stat st;
+	snprintf(p, sizeof p, "%s/bin/exec_only_exit42", FAKE_ROOTFS);
+	test_int_eq(stat(p, &st), 0);
+	test_int_eq((long)(st.st_mode & 07777), 0111);
+
+	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* Malformed third field in a -b spec: exactly "ro" or nothing. */
+test(prod_rootfs_bad_bind_ro_spec_exits_84)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS,
+		"-b", FAKE_BINDSRC ":opt:rw",
+		"--", "/bin/static_exit42", NULL
+	};
+	test_int_eq(run_with(args), 84);
+
+	rh_rmrf(FAKE_ROOTFS);
+}
