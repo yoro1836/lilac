@@ -1,4 +1,5 @@
 #include "helper_server.h"
+#include "rootless_server.h"
 #include "../container/guest_exec.h"
 #include "../diagnostics/host_probe.h"
 #include "../utils/vine_log.h"
@@ -68,36 +69,9 @@ bool agent_payload(const std::string& reply, std::string* payload, std::string* 
 } // namespace
 
 HelperServer::HelperServer(int in_fd, int out_fd, HelperOptions options)
-    : in_fd_(in_fd), out_fd_(out_fd), options_(std::move(options)) {}
+    : LineServer(in_fd, out_fd), options_(std::move(options)) {}
 
 HelperServer::~HelperServer() = default;
-
-void HelperServer::write_out(const std::string& line) {
-    const std::string msg = line + "\n";
-    const char* p = msg.data();
-    size_t left = msg.size();
-    while (left > 0) {
-        const ssize_t n = write(out_fd_, p, left);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            quit_ = true; // the app is gone
-            return;
-        }
-        p += n;
-        left -= (size_t)n;
-    }
-}
-
-void HelperServer::reply(const std::string& id, bool ok, const std::string& payload) {
-    if (id == "-") return;
-    write_out(id + "\t" + (ok ? "ok" : "err") + "\t" + escape_line(payload));
-}
-
-void HelperServer::emit(const std::string& event, const std::vector<std::string>& fields) {
-    std::string line = "*\t" + event;
-    for (const auto& f : fields) line += "\t" + escape_line(f);
-    write_out(line);
-}
 
 bool HelperServer::path_allowed(const std::string& path) const {
     return !options_.base_dir.empty() && path.size() > options_.base_dir.size() && path[0] == '/' &&
@@ -121,34 +95,11 @@ AgentLink* HelperServer::agent_for(const std::string& instance) {
     return slot.get();
 }
 
-int HelperServer::run() {
-    emit("ready", {"1"});
-    char buf[65536];
-    while (!quit_) {
-        pollfd p{in_fd_, POLLIN, 0};
-        const int pr = poll(&p, 1, 200);
-        if (pr > 0 && (p.revents & (POLLIN | POLLHUP | POLLERR))) {
-            const ssize_t n = read(in_fd_, buf, sizeof(buf));
-            if (n == 0 || (n < 0 && errno != EINTR && errno != EAGAIN)) {
-                quit_ = true;
-            } else if (n > 0) {
-                inbox_.append(buf, (size_t)n);
-                size_t nl;
-                while (!quit_ && (nl = inbox_.find('\n')) != std::string::npos) {
-                    std::string line = inbox_.substr(0, nl);
-                    inbox_.erase(0, nl + 1);
-                    if (!line.empty() && line.back() == '\r') line.pop_back();
-                    if (!line.empty()) handle_line(line);
-                }
-            }
-        }
-        tick();
-    }
+void HelperServer::shutdown() {
     for (auto& entry : handles_) {
         if (Container* c = NamespaceManager::instance().get_container(entry.second)) c->stop(3000);
     }
     NamespaceManager::instance().shutdown();
-    return 0;
 }
 
 void HelperServer::tick() {
@@ -180,14 +131,6 @@ void HelperServer::tick() {
         }
         emit(job.kind, {job.instance, job.name, ok ? "ok" : "err", ok ? "" : "copy failed (out of space?)"});
     }
-}
-
-void HelperServer::handle_line(const std::string& line) {
-    const auto fields = split_fields(line, '\t');
-    if (fields.size() < 2) return;
-    std::vector<std::string> args;
-    for (size_t i = 2; i < fields.size(); ++i) args.push_back(unescape_line(fields[i]));
-    dispatch(fields[0], fields[1], args);
 }
 
 void HelperServer::dispatch(const std::string& id, const std::string& cmd, const std::vector<std::string>& args) {
@@ -241,7 +184,7 @@ void HelperServer::dispatch(const std::string& id, const std::string& cmd, const
         cmd_rmtree(id, args);
     } else if (cmd == "quit") {
         reply(id, true, "");
-        quit_ = true;
+        request_quit();
     } else {
         reply(id, false, "unknown command: " + cmd);
     }
@@ -507,6 +450,10 @@ void HelperServer::cmd_rmtree(const std::string& id, const std::vector<std::stri
 int helper_main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
     HelperOptions opts;
+    bool rootless = false;
+    std::string self = argc > 0 ? argv[0] : "";
+    const size_t slash = self.rfind('/');
+    std::string lib_dir = slash == std::string::npos ? "" : self.substr(0, slash);
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         const bool has_value = i + 1 < argc;
@@ -514,20 +461,24 @@ int helper_main(int argc, char** argv) {
         else if (a == "--qemu" && has_value) opts.qemu_arm_path = argv[++i];
         else if (a == "--uid" && has_value) opts.owner_uid = atoi(argv[++i]);
         else if (a == "--gid" && has_value) opts.owner_gid = atoi(argv[++i]);
+        else if (a == "--libdir" && has_value) lib_dir = argv[++i];
+        else if (a == "--rootless") rootless = true;
     }
     if (opts.owner_gid < 0) opts.owner_gid = opts.owner_uid;
+    if (opts.base_dir.empty()) {
+        fprintf(stderr, "usage: vine_helper [--rootless] --base <instances dir> [--uid N] [--gid N] [--qemu path] [--libdir dir]\n");
+        return 2;
+    }
+    umask(022);
+    if (rootless) {
+        RootlessServer server(STDIN_FILENO, STDOUT_FILENO, {opts.base_dir, lib_dir});
+        return server.run();
+    }
     if (geteuid() != 0) {
         fprintf(stderr, "vine_helper must run as root\n");
         return 3;
     }
-    if (opts.base_dir.empty()) {
-        fprintf(stderr, "usage: vine_helper --base <instances dir> [--uid N] [--gid N] [--qemu path]\n");
-        return 2;
-    }
-    umask(022);
-    std::string self = argc > 0 ? argv[0] : "";
-    const size_t slash = self.rfind('/');
-    NamespaceManager::instance().init(opts.base_dir, slash == std::string::npos ? "" : self.substr(0, slash));
+    NamespaceManager::instance().init(opts.base_dir, lib_dir);
     HelperServer server(STDIN_FILENO, STDOUT_FILENO, opts);
     return server.run();
 }

@@ -8,19 +8,9 @@ Staging lives in `/data/local/tmp/vine-dev/` (shell user):
   `app/src/main/jniLibs/arm64-v8a/`), `ext4extract` (NDK static build of
   `app/src/main/cpp/rootless/ext4_extract.c` with `-DVINE_EXT4_EXTRACT_MAIN`),
   `faultcatch` (NDK static build of `faultcatch.c`), `vine_wl`,
-  `vine_pulse` and `vine_lmkd` (the app's CMake targets `libvine_wl.so`,
-  `libvine_pulse.so`, `libvine_lmkd.so`),
-  `vine_hal_service` (see below).
-
-`vine_hal_service` links the image's own `libhidlbase.so` and `libc++.so`,
-whose libc++ ABI namespace is `std::__1` (the NDK's is `__ndk1`). Copy
-both from the image's `/system/lib64` into a dir `plat-lib`, put a
-`__config_site` defining `_LIBCPP_ABI_NAMESPACE __1` into `plat-inc`
-next to the image's HIDL headers, then:
-
-    aarch64-linux-android33-clang++ -std=c++17 -O2 -fPIE -pie \
-      -isystem plat-inc -nostdlib++ -Lplat-lib -Wl,--allow-shlib-undefined \
-      app/src/main/cpp/rootless/hal_service.cpp -lhidlbase -lc++
+  `vine_pulse`, `vine_lmkd` and `vine_hal_service` (the app's CMake
+  targets `libvine_wl.so`, `libvine_pulse.so`, `libvine_lmkd.so`,
+  `libvine_hal_service.so`; the last dlopen()s the image's libhidlbase).
 - `w/rootfs`: a Waydroid system image extracted with
   `bin/ext4extract system.img w/rootfs --owners w/tawcroot/owners`, its
   vendor image into `w/rootfs/vendor` the same way.

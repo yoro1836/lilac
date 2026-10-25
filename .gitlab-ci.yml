@@ -119,6 +119,14 @@ native-pulse-tests:
     - apt-get update -qq && apt-get install -y -qq libpulse-dev libasound2-dev libasound2-plugins pkg-config > /dev/null
     - sh app/src/main/cpp/tests/native/run_pulse_tests.sh
 
+native-rootless-tests:
+  extends: .rules-ci
+  stage: test
+  image: gcc:14
+  script:
+    - apt-get update -qq && apt-get install -y -qq python3 e2fsprogs zlib1g-dev > /dev/null
+    - sh app/src/main/cpp/tests/native/run_rootless_tests.sh
+
 tawcroot-host-tests:
   extends: .rules-ci
   stage: test

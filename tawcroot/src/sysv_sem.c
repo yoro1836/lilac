@@ -214,8 +214,10 @@ done:
 static long operate(const tawcroot_syscall_args *args, int timed, ucontext_t *uc) {
     unsigned count = args->c;
     if (!count) return -22;
-    if (args->c > 64) return -7;
-    struct sembuf ops[64];
+    /* SEMS ops cover every semaphore of a set; more would push this
+     * handler past its 1 KiB stack frame budget */
+    if (args->c > SEMS) return -7;
+    struct sembuf ops[SEMS];
     long result = tawc_copy_from_guest(ops, count * sizeof(*ops), (void *)args->b);
     if (result) return result;
     struct stamp deadline = {0}, time;

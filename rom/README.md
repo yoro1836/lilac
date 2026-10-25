@@ -38,7 +38,7 @@ The container has its own PID, UTS, IPC, network and mount namespaces and a cgro
 | `system/etc/vine/net.sh` | Repairs `eth0` from the boot props if the engine's setup is missing. |
 | `agent/` | The guest agent. `AgentProtocol.java` is plain Java and unit tested, `VineAgent.java` is the Android side (input injection, PackageManager, clipboard). `build_agent.sh` makes `vine-agent.jar`. |
 | `hwc/vinefb_writer.h` | Header only writer for the display contract, tested against the host reader. |
-| `package_vrom.py` | Packs `ramdisk.img`, `system.img` and an optional `vendor.img` into a `.vrom`. |
+| `package_vrom.py` | Packs `ramdisk.img`, `system.img` and an optional `vendor.img` into a `.vrom`. `--kind waydroid` packs a system-as-root image without a ramdisk (Waydroid's system and vendor images), which the app boots on the rootless engine (`docs/rootless.md`). |
 
 ## Assembling a ROM
 

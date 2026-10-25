@@ -52,11 +52,18 @@ add_library(vine_core STATIC
     diagnostics/namespace_probe.cpp
     display/pixel_convert.cpp
     display/vinefb_reader.cpp
+    display/wayland/input_lines.cpp
     helper/agent_link.cpp
     helper/helper_server.cpp
+    helper/line_server.cpp
+    helper/rootless_server.cpp
     qemu_bridge/qemu_launcher.cpp
+    rootless/ext4_extract.c
+    rootless/rootless_instance.cpp
+    rootless/rootless_prep.cpp
 )
 target_include_directories(vine_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(vine_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tawcroot/include)
 target_link_libraries(vine_core PUBLIC ${log-lib} ${z-lib})
 
 # Loaded into the app process: device probing and putting guest frames on a Surface
@@ -67,7 +74,7 @@ add_library(vine_runtime SHARED
 target_link_libraries(vine_runtime PRIVATE vine_core ${android-lib})
 target_link_options(vine_runtime PRIVATE -Wl,-z,max-page-size=16384)
 
-# Run as root via su, named lib*.so so Android extracts it to the native library directory
+# Run as root via su (or as the app for the rootless engine), named lib*.so so Android extracts it to the native library directory
 add_executable(vine_helper helper/helper_main.cpp)
 target_link_libraries(vine_helper PRIVATE vine_core)
 target_link_options(vine_helper PRIVATE -pie -Wl,-z,max-page-size=16384)
@@ -101,7 +108,12 @@ add_executable(vine_pulse
 target_link_libraries(vine_pulse PRIVATE aaudio)
 target_link_options(vine_pulse PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-size=16384)
 
-foreach(tool vine_wl vine_lmkd vine_pulse)
+# Copied into the guest as its audio HAL service on hosts without AArch32 (the image's is 32-bit only)
+add_executable(vine_hal_service rootless/hal_service.cpp)
+target_link_libraries(vine_hal_service PRIVATE dl)
+target_link_options(vine_hal_service PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-size=16384)
+
+foreach(tool vine_wl vine_lmkd vine_pulse vine_hal_service)
     set_target_properties(${tool} PROPERTIES PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "${tool}")
     if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
         set_target_properties(${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")

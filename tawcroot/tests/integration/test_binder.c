@@ -97,6 +97,59 @@ test(prod_binder_transactions)
 #endif
 }
 
+/* A binderd dir whose socket paths overflow sun_path, like an app data
+ * dir: binderd listens relative to its cwd, the shim connects through the
+ * bind's directory fd. */
+test(prod_binder_long_dir)
+{
+#if defined(__ANDROID__)
+	printf("    skipping (host-only, see prod_binder_transactions)\n");
+	return;
+#else
+	const char *parent = TAWCROOT_TEST_TMPDIR "/tawcroot-test-binder-long-"
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+	char dir[PATH_MAX], bind[PATH_MAX];
+	snprintf(dir, sizeof dir, "%s/binderfs", parent);
+	snprintf(bind, sizeof bind, "%s:/dev/binderfs", dir);
+	test_true(strlen(dir) + sizeof "/vndbinder" > 108);
+	rh_rmrf(BINDER_ROOTFS);
+	rh_rmrf(parent);
+	test_true(build_binder_rootfs());
+	test_true(rh_mkdir_p(dir, 0755));
+
+	pid_t binderd = fork();
+	if (binderd == 0) {
+		if (chdir(parent) != 0) _exit(126);
+		execl(TAWCROOT_BINDERD_BIN, "binderd", "binderfs", (char *)NULL);
+		_exit(127);
+	}
+	test_true(binderd > 0);
+	char ready[PATH_MAX];
+	snprintf(ready, sizeof ready, "%s/ready", dir);
+	test_true(rh_poll_for_path(ready, 100));
+
+	VecStr cmd = c_init(vec_str, {
+		TAWCROOT_PROD_BIN, "-r", BINDER_ROOTFS,
+		"-b", bind,
+		"--", "/bin/static_binder_check",
+	});
+	int rc = -1;
+	FailableResult res = run_subproc((SubprocArgs){ .vec_cmd = cmd, .exit_code = &rc });
+	failable_result_drop(&res);
+
+	kill(binderd, SIGTERM);
+	int status = 0;
+	waitpid(binderd, &status, 0);
+
+	test_int_eq(rc, 42);
+	test_true(WIFEXITED(status));
+	test_int_eq(WEXITSTATUS(status), 0);
+
+	rh_rmrf(BINDER_ROOTFS);
+	rh_rmrf(parent);
+#endif
+}
+
 /* The manager dies holding the child's call and with a nested call into
  * the child outstanding: the child's call must end in BR_DEAD_REPLY,
  * and binderd must unwind both stacks without leaking or crashing. */

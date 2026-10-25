@@ -40,24 +40,51 @@ Checked against `lineage-20.0-20260927-VANILLA-waydroid_arm64-system.zip` and
 
 ```
 VineOS app process (app uid)
-├─ Kotlin UI, VineVMManager, HelperClient           (unchanged)
-├─ libvine_runtime.so
-│    └─ vine compositor: Wayland server on <instance>/run/wayland-0,
-│       draws into the VMDisplayScreen Surface, feeds touch/keys
+├─ Kotlin UI, VineVMManager, HelperClient
+├─ libvine_runtime.so: DisplayBridge draws <instance>/shared/vinefb
 └─ libvine_helper.so --rootless                      (same line protocol, no su)
-     ├─ binderd (one per instance): binder / hwbinder / vndbinder
-     └─ tawcroot --init --cgroup --owners -r <rootfs> … -- /init
-          └─ servicemanager, hwservicemanager, surfaceflinger,
-             composer HAL (hwcomposer.waydroid) ──► wayland-0
-             zygote64 → system_server → apps, vine agent
+     ├─ per instance: rootfs preparation (a child, once per boot)
+     ├─ binderd: binder / hwbinder / vndbinder
+     ├─ vine_wl: Wayland server on run/wayland-0 ──► shared/vinefb,
+     │    input lines on <instance>/rootless/input
+     ├─ vine_pulse: PulseAudio server on run/pulse/native
+     └─ keeper (subreaper of every guest process)
+          └─ tawcroot --init --all-caps --cgroup --owners -r <rootfs> … -- /system/bin/init second_stage
+               └─ servicemanager, hwservicemanager, surfaceflinger,
+                  composer HAL (hwcomposer.waydroid) ──► wayland-0
+                  zygote64 → system_server → apps
 ```
 
-`HelperClient` already takes a `spawn: () -> Process`. The rootless engine
-is a second implementation behind the same tab-separated protocol
-(`start`, `stop`, `status`, `apps`, `launch`, `icon`, …), so
-`VineVMManager` and the UI do not change. Only `HelperLauncher` picks
-`su -c libvine_helper.so` or a direct exec of
-`libvine_helper.so --rootless`.
+The rootless engine (`helper/rootless_server.cpp`,
+`rootless/rootless_instance.cpp`) is a second implementation of the
+helper protocol. `VineVMManager` keeps one `HelperClient` per engine:
+instances whose ROM has no `ramdisk.img` (system-as-root Waydroid
+images, `package_vrom.py --kind waydroid`) go to
+`libvine_helper.so --rootless`, started directly as the app; the others
+to the root helper under `su`.
+
+How the protocol maps:
+
+| Command | Rootless engine |
+|---|---|
+| `start` | prepares the rootfs in a child (extraction on first boot, [rootless-boot.md](rootless-boot.md)), then starts binderd, vine_wl, vine_pulse and init; `running` once init's rc writes `/run/user/1000/boot_completed` |
+| `stop`, `kill` | SIGTERM to the keeper, which kills its whole tree (zygotes and apps included), then the servers |
+| `pause`, `resume` | SIGSTOP/SIGCONT to every process below the keeper |
+| `agent_send` | the line goes to vine_wl's input socket; keys without an evdev code (APP_SWITCH) go through the guest's `input keyevent` |
+| `agent ping` | answers ok (input works); other agent requests fail: there is no guest agent |
+| `exec` | `tawcroot -r <rootfs> --owners <binds> -- /system/bin/sh -c 'exec "$@"'`, environment from `init.environ.rc` |
+| `apps` | `cmd package query-activities` for launcher activities; labels are package names |
+| `launch` | `cmd package resolve-activity`, then `cmd activity start-activity` |
+| `icon`, snapshots | not supported yet |
+
+Per instance, under `<instance>/rootless/`: `rootfs/` (the extracted
+images, `rootfs.stamp` records which), `tawcroot/` (the store and
+ownership table), `data/` (the guest's `/data`), `binderfs/`, `run/`
+(`/run/user/1000`), `input`, `logs/` (`prepare`, `init`, `binderd`,
+`vine_wl`, `vine_pulse`; `diag` shows their tails, kmsg and logcat).
+A changed system or vendor image is extracted again, and `/data` and the
+ownership table start over with it. The images stay in the instance dir
+next to the rootfs (about twice the ROM's size on disk).
 
 ## Repository layout
 
@@ -72,7 +99,7 @@ is a second implementation behind the same tab-separated protocol
 | `app/src/main/java/.../domain/` | engine choice: rootless by default, root when available and asked for |
 | `rom/waydroid/` | guest overlay: prop template (`ro.zygote=zygote64`, `sys.use_memfd=true`, GPU props), init rc that starts the vine agent |
 | `rom/build/` (later) | `local_manifests` patches over Waydroid's tree, Hetzner build scripts |
-| `scripts/waydroid_to_vrom.py` | Waydroid OTA zips → `.vrom` (system.img + vendor.img, no ramdisk) |
+| `rom/package_vrom.py --kind waydroid` | Waydroid's system.img + vendor.img (unzipped from the OTA zips) → `.vrom`, no ramdisk |
 
 tawcroot also gets the Android device and `/proc`/`/sys` emulation, a
 nested-seccomp no-op for zygote. The ownership store is done (`--owners`,
@@ -192,7 +219,10 @@ does it. Keep a snapshot only while iterating often.
    there: system_server, SystemUI and the launcher run and injected touch
    and keys work; binderd stability remains. No ROM patches so far, only
    rootfs preparation ([rootless-boot.md](rootless-boot.md)).
-5. Rootless engine behind the helper protocol, `.vrom` extraction, UI switch.
+5. Rootless engine behind the helper protocol, `.vrom` extraction, UI
+   switch. In progress: the engine and the app's engine choice are done
+   and host tested (`tests/native/run_rootless_tests.sh`); icons, app
+   labels and snapshots are not.
 6. Own 64-bit-only ROM build if milestone 4 needs patches.
 
 ## Risks

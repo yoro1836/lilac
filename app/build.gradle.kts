@@ -186,10 +186,11 @@ dependencies {
 
 // tawcroot and binderd, the rootless engine's runtime (docs/rootless.md), staged as libtawcroot.so and libbinderd.so like libvine_helper.so.
 // It only exists for the 64-bit ABIs, so the rootless engine is unavailable on armeabi-v7a and x86.
+val ndkDirectory = androidComponents.sdkComponents.ndkDirectory
 for ((abi, scriptAbi) in listOf("arm64-v8a" to "aarch64", "x86_64" to "x86_64")) {
     val buildTawcroot = tasks.register<Exec>("buildTawcroot${scriptAbi.replaceFirstChar { it.uppercase() }}") {
         workingDir = rootProject.projectDir
-        environment("ANDROID_NDK_HOME", android.ndkDirectory.path)
+        doFirst { environment("ANDROID_NDK_HOME", ndkDirectory.get().asFile.path) }
         commandLine("tawcroot/build.sh", "--abi=$scriptAbi")
         inputs.file(rootProject.file("tawcroot/build.sh"))
         inputs.dir(rootProject.file("tawcroot/src"))

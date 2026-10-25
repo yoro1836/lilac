@@ -1,6 +1,6 @@
 package com.hexadecinull.vineos.helper
 
-// Builds the `su` command line that starts libvine_helper.so as root
+// Command lines that start libvine_helper.so: as root through `su`, or as the app for the rootless engine
 object HelperLauncher {
     const val HELPER_LIB = "libvine_helper.so"
     const val QEMU_LIB = "libqemu_arm.so"
@@ -15,4 +15,7 @@ object HelperLauncher {
         if (!qemuPath.isNullOrEmpty()) sb.append(" --qemu ").append(shellQuote(qemuPath))
         return listOf("su", "-c", sb.toString())
     }
+
+    fun rootlessCommand(nativeLibDir: String, baseDir: String): List<String> =
+        listOf("$nativeLibDir/$HELPER_LIB", "--rootless", "--base", baseDir)
 }

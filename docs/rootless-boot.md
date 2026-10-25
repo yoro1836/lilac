@@ -54,8 +54,9 @@ posts each frame as a `wl_shm` buffer to `vine_wl`, which writes it into
 
 ## Rootfs preparation (host contract)
 
-What the engine must do to an extracted image, done today by
-`boot-init.sh`:
+What the engine must do to an extracted image: the app's rootless engine
+does it in `app/src/main/cpp/rootless/rootless_prep.cpp` before every
+boot, the dev loop in `boot-init.sh`:
 
 - Hosts without AArch32 (Exynos 2400 and other recent SoCs): rewrite the
   `ro.*.product.cpu.abilist*` props to 64-bit only and `ro.zygote` to
@@ -77,6 +78,14 @@ What the engine must do to an extracted image, done today by
 - No keychords: `vine-rootless.rc` overrides bugreport without its
   `keycodes`, else init opens the input FIFOs and blocks until the
   hwcomposer writes one. `/dev/input` starts empty each boot.
+- Boot signal: `vine-rootless.rc` writes `/run/user/1000/boot_completed`
+  on `sys.boot_completed=1`; the engine reports the instance running when
+  it appears.
+- Socket paths: an app data dir leaves no room in `sun_path` (108 bytes)
+  for `<instance>/rootless/run/pulse/native` and the like. binderd,
+  vine_wl and vine_pulse run with their cwd in `<instance>/rootless` and
+  listen on relative paths; the binder shim connects through the bind's
+  directory fd when the full path does not fit.
 - First boot: seed `/data/system/appops.xml` with one op SystemUI
   watches (the system package's SYSTEM_ALERT_WINDOW). LineageOS 20's
   `AppOpsControllerImpl.fetchCurrentActiveOps` iterates
@@ -120,6 +129,9 @@ What the engine must do to an extracted image, done today by
 - SO_PEERCRED reports the fake init as pid 1: init's property service
   took its own "restorecon done" set for a new request and looped
   forever, leaving vold (and system_server's unlock) waiting.
+- binderd freed a transaction's target node while the buffer still
+  pointed at it (`free_buffer` then touched freed memory); a buffer now
+  pins its target node.
 - The binder shim's thread table lives in memory a vfork child shares: a
   child closing the binder fd (ART's Runtime.exec child closes every fd)
   tore down the parent's binder threads, which then failed with EIO
@@ -127,16 +139,10 @@ What the engine must do to an extracted image, done today by
 
 ## Known gaps, next
 
-- binderd now and then segfaults; every guest's binder then fails with
-  EIO and the boot falls apart (system_server dies on a missing
-  service, watchdogs fire). Being hunted with `BINDERD_WRAP=bin/faultcatch`.
-- Now and then system_server's watchdog fires with ActivityManager's lock
+- Now and then system_server's watchdog fired with ActivityManager's lock
   held by a binder thread in a oneway `scheduleStopService` that never
-  completes (after an app death). Possibly the same binderd fault;
-  binderd's SIGUSR1 state dump is the starting point.
-- The app does not forward its touches yet: that waits for the rootless
-  engine behind the helper protocol (milestone 5), whose `agent_send`
-  can pass the lines on to `vine_wl --input`.
+  completes (after an app death). Not seen since the target node fix
+  above; binderd's SIGUSR1 state dump is the starting point if it returns.
 - Some Waydroid vendor HALs are 32-bit only (camera, cas, media.omx): no
   camera on 64-bit-only hosts without a rebuild.
 - mdnsd aborts on `FD_SET` with fd 1056+: guest-visible fds at or above

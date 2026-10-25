@@ -31,8 +31,9 @@ sealed interface HelperState {
     data class Failed(val reason: String) : HelperState
 }
 
-// Talks to the root helper over su's stdin and stdout, replies matched by id, events on `events`
-class HelperClient(private val scope: CoroutineScope, private val spawn: () -> Process) {
+// Talks to a helper over its stdin and stdout, replies matched by id, events on `events`.
+// The root helper runs under su; the rootless one (requireRoot = false) as the app's own uid.
+class HelperClient(private val scope: CoroutineScope, private val requireRoot: Boolean = true, private val spawn: () -> Process) {
     private val connectLock = Mutex()
     private val nextId = AtomicLong(1)
     private val pending = ConcurrentHashMap<String, CompletableDeferred<HelperReply>>()
@@ -51,6 +52,8 @@ class HelperClient(private val scope: CoroutineScope, private val spawn: () -> P
 
     val isReady: Boolean get() = stateFlow.value is HelperState.Ready
 
+    private val name = if (requireRoot) "root helper" else "rootless engine"
+
     // Starts the helper if needed. Safe to call from several places at once.
     suspend fun connect(timeoutMs: Long = 60_000): HelperState = connectLock.withLock {
         if (stateFlow.value is HelperState.Ready && process?.isAlive == true) return@withLock stateFlow.value
@@ -59,9 +62,17 @@ class HelperClient(private val scope: CoroutineScope, private val spawn: () -> P
         val proc = try {
             spawn()
         } catch (e: IOException) {
-            return@withLock fail("Root access is not available (su could not be started)")
+            return@withLock fail(
+                if (requireRoot) "Root access is not available (su could not be started)" else "The rootless engine could not be started",
+            )
         } catch (e: SecurityException) {
-            return@withLock fail("Root access is not available (su is not allowed to start)")
+            return@withLock fail(
+                if (requireRoot) {
+                    "Root access is not available (su is not allowed to start)"
+                } else {
+                    "The rootless engine is not allowed to start"
+                },
+            )
         }
         process = proc
         val readyGate = CompletableDeferred<Unit>()
@@ -81,10 +92,12 @@ class HelperClient(private val scope: CoroutineScope, private val spawn: () -> P
             }
         } ?: false
         if (!up) {
-            val reason = if (proc.isAlive) {
+            val reason = if (!proc.isAlive) {
+                helperFailureText(proc)
+            } else if (requireRoot) {
                 "Timed out waiting for root access. Grant VineOS superuser permission and try again."
             } else {
-                helperFailureText(proc)
+                "The rootless engine did not start in time"
             }
             proc.destroy()
             return@withLock fail(reason)
@@ -92,8 +105,9 @@ class HelperClient(private val scope: CoroutineScope, private val spawn: () -> P
 
         val hello = rawRequest("hello", emptyList(), 10_000)
         val uid = HelperProtocol.parseKeyValues(hello.payload)["uid"]?.toIntOrNull()
-        if (!hello.ok || uid != 0) {
+        if (!hello.ok || uid == null || (requireRoot && uid != 0)) {
             proc.destroy()
+            if (!requireRoot) return@withLock fail("The rootless engine did not answer")
             return@withLock fail("The helper did not get root (uid=${uid ?: "unknown"}). Check that su grants root to VineOS.")
         }
         stateFlow.value = HelperState.Ready(uid)
@@ -101,7 +115,7 @@ class HelperClient(private val scope: CoroutineScope, private val spawn: () -> P
     }
 
     suspend fun request(command: String, vararg args: String, timeoutMs: Long = 20_000): HelperReply {
-        if (!isReady) return HelperReply(false, "The root helper is not running")
+        if (!isReady) return HelperReply(false, "The $name is not running")
         return rawRequest(command, args.toList(), timeoutMs)
     }
 
@@ -200,9 +214,10 @@ class HelperClient(private val scope: CoroutineScope, private val spawn: () -> P
         return when {
             code == 3 -> "The helper started without root. Check that su grants root to VineOS."
             code == 2 -> "The helper was started with wrong arguments"
-            tail.isNotEmpty() -> "The root helper stopped: $tail"
-            code != null -> "The root helper stopped (exit code $code). Root permission may have been denied."
-            else -> "The root helper stopped"
+            tail.isNotEmpty() -> "The $name stopped: $tail"
+            code != null && requireRoot -> "The root helper stopped (exit code $code). Root permission may have been denied."
+            code != null -> "The $name stopped (exit code $code)"
+            else -> "The $name stopped"
         }
     }
 
@@ -218,7 +233,7 @@ class HelperClient(private val scope: CoroutineScope, private val spawn: () -> P
         process = null
         jobs.forEach { it.cancel() }
         jobs = emptyList()
-        for ((_, d) in pending) d.complete(HelperReply(false, "The root helper stopped"))
+        for ((_, d) in pending) d.complete(HelperReply(false, "The $name stopped"))
         pending.clear()
         while (writeQueue.tryReceive().isSuccess) backlog.set(0)
         synchronized(stderrTail) { stderrTail.clear() }

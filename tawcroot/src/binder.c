@@ -283,20 +283,26 @@ long tawcroot_binder_open(int dirfd, const char *path, int flags)
 
 	struct k_sockaddr_un sa = { .family = AF_UNIX_ };
 	size_t n = 0;
-	if (tawc_str_append(sa.path, sizeof sa.path, &n, b->src) < 0 ||
-	    tawc_str_append(sa.path, sizeof sa.path, &n, "/") < 0 ||
-	    tawc_str_append(sa.path, sizeof sa.path, &n, name) < 0)
-		return TAWC_ENAMETOOLONG;
+	int fits = tawc_str_append(sa.path, sizeof sa.path, &n, b->src) == 0 &&
+		   tawc_str_append(sa.path, sizeof sa.path, &n, "/") == 0 &&
+		   tawc_str_append(sa.path, sizeof sa.path, &n, name) == 0;
 
 	long sock = TAWC_RAW(TAWC_SYS_socket, AF_UNIX_, SOCK_SEQPACKET_ | SOCK_CLOEXEC_, 0, 0, 0, 0);
 	if (sock < 0) return sock;
-	long rv = TAWC_RAW(TAWC_SYS_connect, sock, (long)&sa, sizeof sa, 0, 0, 0);
-	if (rv < 0 && n + 1 < sizeof sa.path) {
-		/* binderd --abstract: the same name in the abstract namespace. */
-		memmove(sa.path + 1, sa.path, n + 1);
-		sa.path[0] = 0;
-		rv = TAWC_RAW(TAWC_SYS_connect, sock, (long)&sa,
-			      offsetof(struct k_sockaddr_un, path) + 1 + n, 0, 0, 0);
+	long rv = -1;
+	if (fits) {
+		rv = TAWC_RAW(TAWC_SYS_connect, sock, (long)&sa, sizeof sa, 0, 0, 0);
+		if (rv < 0 && n + 1 < sizeof sa.path) {
+			/* binderd --abstract: the same name in the abstract namespace. */
+			memmove(sa.path + 1, sa.path, n + 1);
+			sa.path[0] = 0;
+			rv = TAWC_RAW(TAWC_SYS_connect, sock, (long)&sa,
+				      offsetof(struct k_sockaddr_un, path) + 1 + n, 0, 0, 0);
+		}
+	} else if (tawc_proc_fd_path(sa.path, sizeof sa.path, b->src_fd, name) > 0) {
+		/* A source dir too long for sun_path (app data dirs): through
+		 * the bind's own directory fd. */
+		rv = TAWC_RAW(TAWC_SYS_connect, sock, (long)&sa, sizeof sa, 0, 0, 0);
 	}
 	if (rv < 0) {
 		tawc_close((int)sock);
