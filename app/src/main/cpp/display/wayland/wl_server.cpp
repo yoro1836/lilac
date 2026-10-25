@@ -594,7 +594,7 @@ struct Output : Object {
         const int32_t w = (int32_t)sink->width(), h = (int32_t)sink->height();
         // geometry: x, y, physical mm (about 400 dpi), subpixel unknown, make, model, normal transform
         client->event(id, 0).i32(0).i32(0).i32(w * 254 / 4000).i32(h * 254 / 4000).i32(0).str("Wayondroid").str("vinefb").i32(0);
-        client->event(id, 1).u32(0x3 /*current|preferred*/).i32(w).i32(h).i32(60000);
+        client->event(id, 1).u32(0x3 /*current|preferred*/).i32(w).i32(h).i32((int32_t)client->server()->refresh_mhz());
         if (version >= 2) {
             client->event(id, 3).i32(1);
             client->event(id, 2);

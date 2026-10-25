@@ -69,6 +69,10 @@ public:
     // From any thread
     void stop();
 
+    // The output's refresh rate in mHz, which paces the client's vsync
+    void set_refresh_mhz(uint32_t mhz) { refresh_mhz_ = mhz; }
+    uint32_t refresh_mhz() const { return refresh_mhz_; }
+
     // Frames handed to the sink so far
     uint64_t frames() const { return frames_; }
     FrameSink* sink() const { return sink_; }
@@ -93,6 +97,7 @@ private:
     std::vector<InputConn> inputs_;
     uint32_t serial_ = 0;
     uint64_t frames_ = 0;
+    uint32_t refresh_mhz_ = 60000;
 };
 
 } // namespace vine::wl

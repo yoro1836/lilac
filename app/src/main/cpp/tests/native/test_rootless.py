@@ -300,7 +300,7 @@ def main():
     check(not ok and "outside" in text, "start outside base refused: " + text)
 
     print("[boot]")
-    ok, text = h.call("start", name, inst, "width=640", "height=480", "dpi=240")
+    ok, text = h.call("start", name, inst, "width=640", "height=480", "dpi=240", "refresh=90")
     check(ok, "start: " + text)
     check(h.wait_state(name, "running") is not None, "reaches running")
     ok, text = h.call("status", name)
@@ -344,6 +344,7 @@ def main():
     sys_init = os.listdir(os.path.join(R, "system/etc/init"))
     check("mediaserver.rc" not in sys_init and "init64.rc" in sys_init, "32-bit system service dropped: " + str(sys_init))
     check("--create 640x480" in read(os.path.join(W, "wl-args.txt")), "display size")
+    check("--refresh 90" in read(os.path.join(W, "wl-args.txt")), "frame rate")
     check(os.path.isfile(os.path.join(inst, "shared/vinefb")), "vinefb created")
     check("/system/bin" in read(os.path.join(W, "init-env.txt")), "init gets the guest PATH")
 

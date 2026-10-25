@@ -16,6 +16,7 @@ struct InstanceConfig {
     int width = 720;
     int height = 1440;
     int dpi = 320;
+    int refresh_hz = 60;         // the guest display's frame rate
     int boot_timeout_s = 900;    // first boots compile every app
     bool host_has_32bit = false;
     bool gpu = false;            // graphics=gfxstream: vine_kumquat on the host GPU

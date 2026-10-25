@@ -306,7 +306,8 @@ bool Instance::launch_services(std::string* error) {
     // Paths relative to W: the app data dir leaves no room in sun_path
     binderd_pid_ = spawn({lib + "libbinderd.so", "binderfs"}, W, layout_.logs + "/binderd.log");
     wl_pid_ = spawn({lib + "libvine_wl.so", "--socket", "run/wayland-0", "--vinefb", layout_.vinefb, "--create",
-                     std::to_string(cfg_.width) + "x" + std::to_string(cfg_.height), "--input", "input"},
+                     std::to_string(cfg_.width) + "x" + std::to_string(cfg_.height), "--input", "input",
+                     "--refresh", std::to_string(std::clamp(cfg_.refresh_hz, 1, 240))},
                     W, layout_.logs + "/vine_wl.log");
     pulse_pid_ = spawn({lib + "libvine_pulse.so", "--socket", "run/pulse/native"}, W, layout_.logs + "/vine_pulse.log");
     // The guest's GPU and gralloc service, its sockets in /run/user/1000
