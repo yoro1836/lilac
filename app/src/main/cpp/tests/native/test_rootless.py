@@ -366,6 +366,8 @@ def main():
     check(read(os.path.join(R, "vendor/lib64/hw/gralloc.default.so")) == "gralloc\n" and
           read(os.path.join(R, "vendor/lib64/hw/gralloc.default_real.so")) == "default gralloc\n", "gralloc shim installed")
     check("ro.sf.lcd_density=240" in read(os.path.join(R, "vendor/waydroid.prop")), "waydroid.prop density")
+    check("ro.surface_flinger.max_frame_buffer_acquired_buffers=4\n" in read(os.path.join(R, "vendor/waydroid.prop")),
+          "4 guest framebuffers")
     check("<op n=\"24\"" in read(os.path.join(W, "data/system/appops.xml")), "appops seeded")
     for d in ("data/misc/ethernet", "data/misc/apexdata/com.android.tethering/misc/ethernet"):
         with open(os.path.join(W, d, "ipconfig.txt"), "rb") as f:

@@ -182,6 +182,11 @@ std::string waydroid_prop(int dpi, bool gpu) {
            // The phone's own volume sets the loudness; a guest volume
            // below max only attenuates twice
            "ro.config.media_vol_default=15\n"
+           // The hwcomposer releases a frame as soon as the next one is
+           // set, but the host still shows it until that one lands:
+           // with SurfaceFlinger's 2 framebuffers the guest draws into the
+           // frame on screen (tearing). 4 give it 2 frames to land.
+           "ro.surface_flinger.max_frame_buffer_acquired_buffers=4\n"
            "ro.opengles.version=196610\n"
            "ro.sf.lcd_density=" + std::to_string(dpi) + "\n"
            "waydroid.background_start=false\n"
