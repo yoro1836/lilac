@@ -3,10 +3,14 @@
 A cloud session (Claude Code on the web) reaches the internet only through
 an HTTPS proxy: no UDP, no inbound connections. It drives a phone over adb
 through [tailcat](https://github.com/tailscale/tailcat), whose WireGuard
-tunnel then rides a DERP relay over websockets. Tailcat's public relays
-cap that at about 0.15 MB/s (an APK install takes minutes), so we run our
-own relay; through it two cloud-side tailcats move about 9 MB/s (a phone,
-so far, 0.1-0.3 MB/s: still being looked into).
+tunnel then rides a DERP relay over websockets. That tops out at about
+0.15 MB/s per websocket, our own relay or tailcat's public ones alike:
+the proxy is the limit (plain HTTPS through it moves 16 MB/s up), and a
+phone reaches our relay at about 8 MB/s. An APK install takes minutes.
+Two tailcats on one host find a direct path; measure the relay with
+`TS_DEBUG_ALWAYS_USE_DERP=1`. A busy relay needs
+`TS_DEBUG_DERP_PER_CLIENT_SEND_QUEUE_DEPTH=512` (the default 32 drops
+packets on the slow websocket side).
 
 ```
 cloud session ── tailcat (websocket, :443) ──► our derper ◄── tailcat ── phone: adbd
