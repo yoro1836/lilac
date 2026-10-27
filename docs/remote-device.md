@@ -5,7 +5,8 @@ an HTTPS proxy: no UDP, no inbound connections. It drives a phone over adb
 through [tailcat](https://github.com/tailscale/tailcat), whose WireGuard
 tunnel then rides a DERP relay over websockets. Tailcat's public relays
 cap that at about 0.15 MB/s (an APK install takes minutes), so we run our
-own relay; through it the same tunnel moves about 9 MB/s.
+own relay; through it two cloud-side tailcats move about 9 MB/s (a phone,
+so far, 0.1-0.3 MB/s: still being looked into).
 
 ```
 cloud session ── tailcat (websocket, :443) ──► our derper ◄── tailcat ── phone: adbd
