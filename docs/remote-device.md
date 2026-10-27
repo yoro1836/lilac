@@ -34,8 +34,10 @@ Cloud free AMD instance does).
 ```
 
   The phone's map uses `<port>`, the cloud session's 443. A tailcat
-  address names the region (900), not the port, so the two meet. Don't
-  give the phone `--full-address`: that bakes the phone's port in.
+  address names the region (900) or, with a saved key, none; never the
+  port, so the two meet. connect.sh uses the cloud map whenever
+  `WAYONDROID_DERPMAP_URL` is set. Don't give the phone `--full-address`:
+  that bakes the phone's port in.
 
 ## Each session
 
