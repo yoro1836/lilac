@@ -33,8 +33,12 @@ the vold FUSE shim, vine_mediascan). Start with [README.md](README.md),
   helper's debug socket: `status|start|stop|exec <instance> ...`), `ui.py tap`.
 - The cloud session's network is HTTPS-only (port 443, no UDP, no inbound).
   Don't try to get around it; ask the user when something needs more.
-- The phones are the user's own. Never reboot one. Don't hold the screen
-  longer than a test needs; the user may be using it.
+- The phones are the user's own. Don't hold the screen longer than a test
+  needs; the user may be using it.
+  - Galaxy S24 (main phone, no root): never reboot it.
+  - Galaxy S22 (test phone, rooted, no lock screen): reboots are fine when a
+    test needs one; `su` works from `adb shell`. Root is for debugging only:
+    run the app itself rootless.
 - Filter logcat to our processes. Scratch files go in `/data/local/tmp/tawc-dev/`;
   delete them, and screenshots, when done.
 - Guest app processes keep zygote's cmdline under tawcroot; find them by

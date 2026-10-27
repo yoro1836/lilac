@@ -67,5 +67,16 @@ TAILCAT_DERPMAP_URL=<the phone's DERP map> tailcat serve 5555
 ```
 
 The printed address is the token; after `tailcat genkey --key=default` it
-stays the same. Termux:Boot can start it at boot. Keep the app running it
-out of battery optimization, or the phone's low-memory killer may end it.
+stays the same. Keep the app running it out of battery optimization, or the
+phone's low-memory killer may end it.
+
+On a phone that may reboot, start both at boot from Termux:Boot
+(`~/.termux/boot/tailcat`); `adb tcpip` doesn't survive a reboot, so a
+rooted phone sets the port itself:
+
+```sh
+#!/data/data/com.termux/files/usr/bin/sh
+termux-wake-lock
+su -c 'setprop service.adb.tcp.port 5555; stop adbd; start adbd'
+TAILCAT_DERPMAP_URL=<the phone's DERP map> tailcat serve 5555
+```
