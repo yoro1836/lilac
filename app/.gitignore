@@ -11,6 +11,8 @@
 # Local keystore or signing config a developer might drop in this module.
 *.jks
 *.keystore
+# CI debug signing: dev APKs from Actions install over each other
+!ci-debug.keystore
 keystore.properties
 
 # Loose APK/AAB someone built and forgot to move to Downloads.

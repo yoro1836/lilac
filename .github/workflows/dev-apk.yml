@@ -1,0 +1,80 @@
+# Debug APK for test phones: built on every push, published as the `dev`
+# prerelease (wayondroid-debug.apk). scripts/remote/install-ci.sh installs it.
+name: dev-apk
+
+on:
+  push:
+    branches: [main, "ccr-*"]
+  workflow_dispatch:
+
+concurrency:
+  group: dev-apk
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  NDK_VERSION: 28.2.13676358
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Android NDK and CMake
+        run: |
+          sdk=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+          yes | $sdk --licenses >/dev/null || true
+          $sdk --install "ndk;$NDK_VERSION" "cmake;3.22.1" >/dev/null
+          # the build scripts take the newest NDK
+          for d in "$ANDROID_HOME"/ndk/*; do
+            [ "$(basename "$d")" = "$NDK_VERSION" ] || sudo rm -rf "$d"
+          done
+          sudo rm -rf "$ANDROID_HOME/ndk-bundle"
+
+      - name: GPU library cache
+        id: gpu
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/src/main/jniLibs/arm64-v8a/libgfxstream_backend.so
+            app/src/main/jniLibs/arm64-v8a/libc++_shared.so
+            app/src/main/jniLibs/arm64-v8a/libvine_kumquat.so
+            app/src/main/jniLibs/arm64-v8a/libvine_vk_gfxstream.so
+          key: gpu-${{ env.NDK_VERSION }}-${{ hashFiles('scripts/gpu/**', 'scripts/lib/deps.sh', 'deps/deps.list', 'deps/*-patches/**', 'gpu/kumquat/**') }}
+
+      - name: GPU libraries
+        if: steps.gpu.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build pkg-config bison >/dev/null
+          pip install --user --break-system-packages -q "meson>=1.4" mako pyyaml packaging
+          export PATH=$HOME/.local/bin:$PATH
+          rustup target add aarch64-linux-android
+          scripts/gpu/build-gpu.sh
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        run: ./gradlew :app:assembleDebug -PvineCiSigning
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk wayondroid-debug.apk
+          git tag -f dev "$GITHUB_SHA"
+          git push -f origin refs/tags/dev
+          gh release view dev >/dev/null 2>&1 ||
+            gh release create dev --prerelease --title "Dev build" --notes pending
+          gh release upload dev wayondroid-debug.apk --clobber
+          # install-ci.sh waits for this commit here
+          gh release edit dev --notes "$GITHUB_SHA ($GITHUB_REF_NAME)"

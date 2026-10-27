@@ -55,6 +55,15 @@ scripts/remote/hs.sh status <instance>  # the rootless helper's debug socket
 scripts/remote/ui.py tap '<text>'       # tap by text or content description
 ```
 
+`deploy.sh` pushes the APK through the tunnel (minutes). For a phone that
+can reach GitHub, push the branch instead: the `dev-apk` workflow builds
+it (`-PvineCiSigning`, the committed `app/ci-debug.keystore`) and
+publishes the `dev` prerelease, and `scripts/remote/install-ci.sh` waits
+for that commit there, then has the phone download and install it. The
+first CI run builds the GPU libraries (about half an hour); later runs
+take them from the cache. The CI key differs from a local debug key, so
+switching a phone between the two needs an uninstall.
+
 These can live in the cloud environment's settings so new sessions start
 with them:
 

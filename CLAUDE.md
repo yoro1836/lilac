@@ -29,16 +29,18 @@ the vold FUSE shim, vine_mediascan). Start with [README.md](README.md),
 ## Phones
 - Remote access from a cloud session: [docs/remote-device.md](docs/remote-device.md).
   `scripts/remote/setup.sh`, then `connect.sh` (token from
-  `$WAYONDROID_PHONE_TOKEN` or the user), `deploy.sh`, `hs.sh` (the rootless
+  `$WAYONDROID_PHONE_TOKEN` or the user), `deploy.sh` (APK through the
+  tunnel: minutes), `install-ci.sh` (push first; the phone fetches the
+  `dev-apk` workflow's APK itself: seconds once CI is done), `hs.sh` (the rootless
   helper's debug socket: `status|start|stop|exec <instance> ...`), `ui.py tap`.
 - The cloud session's network is HTTPS-only (port 443, no UDP, no inbound).
   Don't try to get around it; ask the user when something needs more.
 - The phones are the user's own. Don't hold the screen longer than a test
   needs; the user may be using it.
   - Galaxy S24 (main phone, no root): never reboot it.
-  - Galaxy S22 (test phone, rooted, no lock screen): reboots are fine when a
-    test needs one; `su` works from `adb shell`. Root is for debugging only:
-    run the app itself rootless.
+  - Galaxy S22 (test phone, no lock screen): reboots are fine when a test
+    needs one. It is rooted, but `adb shell` gets no root; install it with
+    `install-ci.sh` (CI's signing key, so not `deploy.sh`).
 - Filter logcat to our processes. Scratch files go in `/data/local/tmp/tawc-dev/`;
   delete them, and screenshots, when done.
 - Guest app processes keep zygote's cmdline under tawcroot; find them by

@@ -47,6 +47,15 @@ android {
     }
 
     signingConfigs {
+        // -PvineCiSigning: debug builds from CI share one committed key
+        if (providers.gradleProperty("vineCiSigning").isPresent) {
+            create("ciDebug") {
+                storeFile = file("ci-debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
         if (hasReleaseSigning) {
             create("release") {
                 storeFile = file(keystoreProperties.getProperty("storeFile"))
@@ -74,6 +83,7 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             isDebuggable = true
+            signingConfigs.findByName("ciDebug")?.let { signingConfig = it }
         }
     }
 
