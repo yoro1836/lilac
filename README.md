@@ -65,6 +65,7 @@ and `vendor.img`. Build one from Waydroid's official images:
    python3 rom/package_vrom.py --kind waydroid IMAGES_DIR waydroid-lineage20.vrom \
        --name "Waydroid LineageOS 20" --android-version 13 --api-level 33
    ```
+   `--deflate` halves the file (slower to unpack).
 4. In the app, import the `.vrom` on the **ROMs** tab, then create an instance from it.
 
 The first boot extracts the images and compiles every app, so it takes a few

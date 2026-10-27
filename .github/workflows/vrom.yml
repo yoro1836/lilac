@@ -1,0 +1,56 @@
+# Packs Waydroid's latest arm64_only images into a .vrom and publishes it
+# as the `rom-<variant>` release, so a test phone can download it itself.
+name: vrom
+
+on:
+  # dispatch needs the file on the default branch; a push of it runs GAPPS
+  push:
+    paths: [.github/workflows/vrom.yml]
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: VANILLA or GAPPS
+        default: GAPPS
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Images
+        run: |
+          set -euo pipefail
+          latest() {
+            curl -fsSL "$1" | python3 -c 'import json,sys
+          r = max(json.load(sys.stdin)["response"], key=lambda x: x["datetime"])
+          print(r["url"], r["id"], r["filename"])'
+          }
+          mkdir -p img
+          for src in "system/lineage/waydroid_arm64_only/${{ inputs.variant || 'GAPPS' }}" vendor/waydroid_arm64_only/MAINLINE; do
+            read -r url sha name < <(latest "https://ota.waydro.id/$src.json")
+            curl -fsSL -o img.zip "$url"
+            echo "$sha  img.zip" | sha256sum -c -
+            unzip -o -q img.zip -d img
+            rm img.zip
+            echo "$name" >> img/sources.txt
+          done
+          ls -la img
+
+      - name: Pack and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v=${{ inputs.variant || 'GAPPS' }}
+          out=waydroid-lineage20-$(echo "$v" | tr A-Z a-z).vrom
+          python3 rom/package_vrom.py --kind waydroid --deflate img "$out" \
+              --name "Waydroid LineageOS 20 ($v)" --android-version 13 --api-level 33
+          rm -rf img/*.img
+          gh release view "rom-$v" >/dev/null 2>&1 ||
+            gh release create "rom-$v" --prerelease --title "ROM: Waydroid LineageOS 20 $v" --notes pending
+          gh release upload "rom-$v" "$out" --clobber
+          gh release edit "rom-$v" --notes "$(cat img/sources.txt)"

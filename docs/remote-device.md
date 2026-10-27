@@ -64,6 +64,11 @@ first CI run builds the GPU libraries (about half an hour); later runs
 take them from the cache. The CI key differs from a local debug key, so
 switching a phone between the two needs an uninstall.
 
+ROMs go the same way: the `vrom` workflow (runs when its file changes, or
+by dispatch from the default branch) packs Waydroid's latest images into
+a deflated `.vrom` on the `rom-GAPPS`/`rom-VANILLA` release; the phone
+downloads it to `/sdcard/Download` and the app imports it from there.
+
 These can live in the cloud environment's settings so new sessions start
 with them:
 

@@ -38,7 +38,8 @@ def build(args: argparse.Namespace) -> Path:
         "sha256": {name: sha256_of(path) for name, path in present.items()},
     }
     out = Path(args.output)
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
+    method = zipfile.ZIP_DEFLATED if args.deflate else zipfile.ZIP_STORED
+    with zipfile.ZipFile(out, "w", method, allowZip64=True) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, indent=2) + "\n")
         for name, path in present.items():
             zf.write(path, name)
@@ -55,6 +56,8 @@ def main() -> None:
     p.add_argument("--abis", nargs="+", default=["arm64-v8a"])
     p.add_argument("--description", default="")
     p.add_argument("--kind", choices=("vine", "waydroid"), default="vine")
+    # Half the size (a GitHub release asset stays under 2 GB); slower to unpack
+    p.add_argument("--deflate", action="store_true")
     out = build(p.parse_args())
     print(f"Wrote {out} ({out.stat().st_size} bytes)", file=sys.stderr)
 
