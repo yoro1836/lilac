@@ -8,5 +8,17 @@ mkdir -p "$TOOLS"
 # ts_debug_websockets: reach DERP relays over websockets, all an HTTPS-only
 # egress proxy lets through (TS_DEBUG_DERP_WS_CLIENT=1 turns it on)
 [ -x "$TAILCAT" ] || GOBIN="$TOOLS" go install -tags ts_debug_websockets github.com/tailscale/tailcat/cmd/tailcat@v0.7.0
+# A fixed adb key (PEM, or base64 of it) so the phone trusts every session
+# without a new "Allow USB debugging?" prompt
+if [ -n "${WAYONDROID_ADB_KEY:-}" ]; then
+    mkdir -p ~/.android
+    case $WAYONDROID_ADB_KEY in
+    -----BEGIN*) printf '%s\n' "$WAYONDROID_ADB_KEY" > ~/.android/adbkey ;;
+    *) printf '%s' "$WAYONDROID_ADB_KEY" | base64 -d > ~/.android/adbkey ;;
+    esac
+    chmod 600 ~/.android/adbkey
+    "$ADB" pubkey ~/.android/adbkey > ~/.android/adbkey.pub
+    "$ADB" kill-server >/dev/null 2>&1 || true
+fi
 "$ADB" version | head -1
 "$TAILCAT" --version

@@ -48,9 +48,16 @@ scripts/remote/hs.sh status <instance>  # the rootless helper's debug socket
 scripts/remote/ui.py tap '<text>'       # tap by text or content description
 ```
 
-`WAYONDROID_DERPMAP_URL` (and `WAYONDROID_PHONE_TOKEN`, which connect.sh
-takes when given no token) can live in the cloud environment's settings
-so new sessions start with them.
+These can live in the cloud environment's settings so new sessions start
+with them:
+
+- `WAYONDROID_DERPMAP_URL`: the cloud side's DERP map.
+- `WAYONDROID_PHONE_TOKEN`: connect.sh's default token. A phone with a
+  saved server key (`tailcat genkey --key=default`, once) keeps one
+  address across restarts.
+- `WAYONDROID_ADB_KEY` (a secret): an adb private key, PEM or base64 of
+  it. setup.sh installs it, so the phone approves it once rather than
+  once per session.
 
 On the phone (Termux or similar, wireless debugging on, port fixed with
 `adb tcpip 5555` or forwarded as is):
@@ -59,5 +66,6 @@ On the phone (Termux or similar, wireless debugging on, port fixed with
 TAILCAT_DERPMAP_URL=<the phone's DERP map> tailcat serve 5555
 ```
 
-The printed address is the token. Keep tailcat's app out of battery
-optimization, or the phone's low-memory killer may end it.
+The printed address is the token; after `tailcat genkey --key=default` it
+stays the same. Termux:Boot can start it at boot. Keep the app running it
+out of battery optimization, or the phone's low-memory killer may end it.
