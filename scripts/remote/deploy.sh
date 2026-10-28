@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # deploy.sh [--no-build] [--no-launch] [--sendit]: build the debug app,
 # install it on the connected phone and start it. --sendit sends the APK
-# through sendit.sh (send.sh, needs curl on the phone) instead of the tunnel
+# through sendit.sh (send.sh) instead of the tunnel
 set -euo pipefail
 . "$(dirname "$0")/env.sh"
 build=1 launch=1 sendit=0
