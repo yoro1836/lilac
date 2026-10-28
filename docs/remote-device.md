@@ -55,7 +55,9 @@ scripts/remote/hs.sh status <instance>  # the rootless helper's debug socket
 scripts/remote/ui.py tap '<text>'       # tap by text or content description
 ```
 
-`deploy.sh` pushes the APK through the tunnel (minutes). For a phone that
+`deploy.sh` pushes the APK through the tunnel (minutes); with `--sendit`
+it goes through sendit.sh over plain HTTPS (`send.sh`, needs `curl` on
+the phone: the S22 has one, the S24 not). For a phone that
 can reach GitHub, push the branch instead: the `dev-apk` workflow builds
 it (`-PvineCiSigning`, the committed `app/ci-debug.keystore`) and
 publishes the `dev` prerelease, and `scripts/remote/install-ci.sh` waits
