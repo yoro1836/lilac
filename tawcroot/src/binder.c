@@ -104,6 +104,7 @@ struct thread_slot {
 	int tid;
 	int sock;             /* reserved */
 	int sigfd;            /* reserved, -1 until needed */
+	uint64_t sigmask;     /* what sigfd watches */
 	uint8_t *stage;
 };
 
@@ -235,9 +236,19 @@ static long recv_msg(int sock, struct bw_msg *m, int *fds, int *nfds, int max, i
 	return n;
 }
 
+/* Our pid, cached beside the owner in the MADV_WIPEONFORK page: a fork
+ * child reads 0 and asks again. Saves a getpid per binder ioctl. */
+static long self_pid(void)
+{
+	if (!g_owner) return tawc_getpid();
+	long pid = g_owner[1];
+	if (!pid) g_owner[1] = pid = tawc_getpid();
+	return pid;
+}
+
 static int32_t guest_pid(void)
 {
-	long pid = tawc_getpid();
+	long pid = self_pid();
 	return pid == tawcroot_namespace.init_pid ? 1 : (int32_t)pid;
 }
 
@@ -502,11 +513,15 @@ static long round_trip(struct thread_slot *t, int nsend, int *nfds, ucontext_t *
 		if (uc && !cancelled) {
 			uint64_t mask = ~*(uint64_t *)&uc->uc_sigmask;
 			mask &= ~((1ull << (SIGSYS_ - 1)) | (1ull << (SIGKILL_ - 1)) | (1ull << (SIGSTOP_ - 1)));
-			long sfd = TAWC_RAW(__NR_signalfd4, t->sigfd, (long)&mask, 8,
-					    O_CLOEXEC | O_NONBLOCK, 0, 0);
-			if (t->sigfd < 0 && sfd >= 0) {
-				sfd = reserve(sfd);
-				if (sfd >= 0) t->sigfd = (int)sfd;
+			/* The mask rarely changes between calls */
+			if (t->sigfd < 0 || mask != t->sigmask) {
+				long sfd = TAWC_RAW(__NR_signalfd4, t->sigfd, (long)&mask, 8,
+						    O_CLOEXEC | O_NONBLOCK, 0, 0);
+				if (t->sigfd < 0 && sfd >= 0) {
+					sfd = reserve(sfd);
+					if (sfd >= 0) t->sigfd = (int)sfd;
+				}
+				if (sfd >= 0) t->sigmask = mask;
 			}
 			pf[1].fd = t->sigfd;
 		}
@@ -712,7 +727,7 @@ long tawcroot_binder_ioctl(int fd, unsigned int cmd, long arg, ucontext_t *uc)
 	struct binder_slot *s = find_binder(fd);
 	if (!s) return TAWC_ENOSYS;
 	/* A forked child shares the fd but not the binder process. */
-	if (s->owner != tawc_getpid()) return TAWC_EINVAL;
+	if (s->owner != self_pid()) return TAWC_EINVAL;
 	if (cmd == BINDER_VERSION) {
 		struct binder_version v = { BINDER_CURRENT_PROTOCOL_VERSION };
 		return tawc_copy_to_guest((void *)arg, &v, sizeof v) ? TAWC_EFAULT : 0;
